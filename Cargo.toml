@@ -1,0 +1,9 @@
+[workspace]
+
+members = [
+    "layer3to4",
+    "tun2layer4",
+    "uvcertificate",
+    "uvserver",
+    "uvclient"
+]

@@ -1,0 +1,3 @@
+port: 18590
+ssl-cert: ./cert.pem
+ssl-key: ./key.pem

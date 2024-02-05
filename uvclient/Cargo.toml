@@ -1,0 +1,23 @@
+[package]
+name = "uvclient"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+
+log = "0.4"
+simple_logger = "4.0.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+
+
+tokio = { version = "1.25.0", features = ["full"] }
+tokio-rustls = { version = "0.23.4" }
+rustls-pemfile = "1.0.2"
+
+tun2layer4 = {path = "../tun2layer4"}
+
+[target.'cfg(windows)'.build-dependencies]
+winres = "0.1"
