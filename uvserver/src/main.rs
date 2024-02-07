@@ -77,16 +77,16 @@ async fn main() {
         match listener.accept().await {
             Ok((income_conn, _addr)) => {
                 let tlsacceptor = tlsacceptor.clone();
-                let ctrl_conn = match tlsacceptor.accept(income_conn).await {
-                    Ok(x) => x,
-                    Err(e) => {
-                        log::error!("peer error {} {}", _addr, e);
-                        continue;
-                    }
-                };
-                let (mut _ctrl_recv, mut _ctrl_send) = split(ctrl_conn);
-
                 tokio::spawn(async move {
+                    let ctrl_conn = match tlsacceptor.accept(income_conn).await {
+                        Ok(x) => x,
+                        Err(e) => {
+                            log::error!("peer error {} {}", _addr, e);
+                            return;
+                        }
+                    };
+                    let (mut _ctrl_recv, mut _ctrl_send) = split(ctrl_conn);
+
                     // 主连接channel
                     let (mtx, mut mrx) = mpsc::channel::<Vec<u8>>(10);
                     // 发送channel
