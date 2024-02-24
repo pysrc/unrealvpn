@@ -21,17 +21,26 @@ uvserver
 ```
 cert.pem
 key.pem
-config.yml
+server-config.yml
 uvserver
 ```
 
 uvclient
 ```
 cert.pem
-config.yml
+client-config.yml
 uvclient.exe
 wintun.dll
 ```
+
+uvclient-socks5
+```
+cert.pem
+s5client-config.yml
+uvclient-socks5.exe
+```
+
+其中uvserver放置于集群内部，uvclient与uvclient-socks5可任选一个
 
 # 声明
 

@@ -5,5 +5,6 @@ members = [
     "tun2layer4",
     "uvcertificate",
     "uvserver",
-    "uvclient"
+    "uvclient",
+    "uvclient-socks5",
 ]
