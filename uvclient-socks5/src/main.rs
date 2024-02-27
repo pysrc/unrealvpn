@@ -15,6 +15,7 @@ async fn handle_client(
     mut stream: TcpStream, 
     smc: tcpmuxclient::StreamMuxClient,
     _server_domainc: Arc<RwLock<HashSet<String>>>,
+    full: bool,
 ) -> Result<(), Box<dyn Error>> {
     // 读取第一个字节，这是版本号，应该是 5
     let mut buffer = [0; 2];
@@ -71,6 +72,11 @@ async fn handle_client(
     stream.write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0]).await?;
     
     // up_stream(stream, address, port, mtx, _channel_mapc, _global_vec_poolc, _global_idc).await;
+    if full {
+        // 直接交给上游服务端解析
+        smc.add(stream, address, port).await;
+        return Ok(());
+    }
     // 检查domain是否在远程列表里面
     let _user_server = match _server_domainc.read() {
         Ok(r) => {
@@ -123,6 +129,8 @@ async fn handle_client(
 struct Config {
     bind: String,
     server: String,
+    #[serde(default)]
+    full: bool,
     #[serde(rename = "ssl-cert")]
     ssl_cert: String,
 }
@@ -205,46 +213,49 @@ async fn main() -> Result<(), Box<dyn Error>> {
     };
     let mut _server_domain = Arc::new(RwLock::new(_server_domain));
     let _server_domainc = _server_domain.clone();
-    tokio::spawn(async move {
-        // 检测服务端域名是否新增，是的话写入文件
-        let mut _len = match _server_domainc.read() {
-            Ok(_r) => _r.len(),
-            Err(_) => 0,
-        };
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-            let _current_len = match _server_domainc.read() {
+    if !cfg.full {
+        tokio::spawn(async move {
+            // 检测服务端域名是否新增，是的话写入文件
+            let mut _len = match _server_domainc.read() {
                 Ok(_r) => _r.len(),
                 Err(_) => 0,
             };
-            if _current_len == _len {
-                continue;
-            }
-            _len = _current_len;
-            // 将 HashSet 包装到结构体中以进行序列化
-            match _server_domainc.read() {
-                Ok(_data) => {
-                    let wrapper = HashSetWrapper { set: _data.clone() };
-
-                    // 将数据序列化为 YAML 格式
-                    let yaml_data = serde_yaml::to_string(&wrapper).unwrap();
-        
-                    // 将 YAML 数据写入文件
-                    if let Ok(mut file) = File::create(server_domain_cfg) {
-                        let _ = file.write_all(yaml_data.as_bytes());
-                    }
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                let _current_len = match _server_domainc.read() {
+                    Ok(_r) => _r.len(),
+                    Err(_) => 0,
+                };
+                if _current_len == _len {
+                    continue;
                 }
-                Err(_) => {}
+                _len = _current_len;
+                // 将 HashSet 包装到结构体中以进行序列化
+                match _server_domainc.read() {
+                    Ok(_data) => {
+                        let wrapper = HashSetWrapper { set: _data.clone() };
+    
+                        // 将数据序列化为 YAML 格式
+                        let yaml_data = serde_yaml::to_string(&wrapper).unwrap();
+            
+                        // 将 YAML 数据写入文件
+                        if let Ok(mut file) = File::create(server_domain_cfg) {
+                            let _ = file.write_all(yaml_data.as_bytes());
+                        }
+                    }
+                    Err(_) => {}
+                }
             }
-        }
-    });
-
+        });
+    }
+    
     loop {
         let (stream, _) = listener.accept().await?;
         let smcc = smc.clone();
         let _server_domainc = _server_domain.clone();
+        let full = cfg.full;
         tokio::spawn(async move {
-            if let Err(e) = handle_client(stream, smcc, _server_domainc).await {
+            if let Err(e) = handle_client(stream, smcc, _server_domainc, full).await {
                 log::error!("{}->{}", line!(), e);
             }
         });
