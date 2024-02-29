@@ -14,7 +14,7 @@ mod tcpmuxclient;
 async fn handle_client(
     mut stream: TcpStream, 
     smc: tcpmuxclient::StreamMuxClient,
-    _server_domainc: Arc<RwLock<HashSet<String>>>,
+    _domain_cachec: Arc<RwLock<HashSetWrapper>>,
     full: bool,
 ) -> Result<(), Box<dyn Error>> {
     // 读取第一个字节，这是版本号，应该是 5
@@ -77,24 +77,65 @@ async fn handle_client(
         smc.add(stream, address, port).await;
         return Ok(());
     }
-    // 检查domain是否在远程列表里面
-    let _user_server = match _server_domainc.read() {
+    // 检查domain是远程还是本地解析
+    
+    let _domain_parse = match _domain_cachec.read() {
         Ok(r) => {
-            r.contains(&address)
+            (r.local.contains(&address), r.server.contains(&address))
         }
         Err(_) => {
-            false
+            (false, false)
         }
     };
     // 连接目标服务器
-    if _user_server {
+    if _domain_parse.0 {
+        // 必须本地解析
+        let mut target_stream = match TcpStream::connect((address.as_str(), port)).await {
+            Ok(_conn) => _conn,
+            Err(e) => {
+                log::error!("dst error {} {}: {}:{}", line!(), e, address, port);
+                return Ok(());
+            }
+        };
+        // 转发数据
+        let (mut client_reader, mut client_writer) = stream.split();
+        let (mut target_reader, mut target_writer) = target_stream.split();
+
+        tokio::try_join!(
+            tokio::io::copy(&mut client_reader, &mut target_writer),
+            tokio::io::copy(&mut target_reader, &mut client_writer),
+        )?;
+
+        return Ok(())
+    }
+    if _domain_parse.1 {
         // 直接交给上游服务端解析
         smc.add(stream, address, port).await;
         return Ok(());
     }
-    let mut target_stream = match timeout(std::time::Duration::from_millis(3000), TcpStream::connect((address.as_str(), port))).await {
+    match timeout(std::time::Duration::from_millis(3000), TcpStream::connect((address.as_str(), port))).await {
         Ok(cc) => match cc {
-            Ok(cc) => cc,
+            Ok(mut target_stream) => {
+                // 本地解析
+                match _domain_cachec.write() {
+                    Ok(mut _w) => {
+                        _w.local.insert(address.clone());
+                    }
+                    Err(_) => {
+                        return Ok(());
+                    }
+                }
+                // 转发数据
+                let (mut client_reader, mut client_writer) = stream.split();
+                let (mut target_reader, mut target_writer) = target_stream.split();
+
+                tokio::try_join!(
+                    tokio::io::copy(&mut client_reader, &mut target_writer),
+                    tokio::io::copy(&mut target_reader, &mut client_writer),
+                )?;
+
+                return Ok(());
+            },
             Err(e) => {
                 log::error!("dst error {}: {}:{}", e, address, port);
                 return Ok(());
@@ -102,27 +143,18 @@ async fn handle_client(
         },
         Err(_) => {
             // 超时，交给上游服务端解析
-            match _server_domainc.write() {
+            match _domain_cachec.write() {
                 Ok(mut _w) => {
-                    _w.insert(address.clone());
+                    _w.server.insert(address.clone());
                 }
-                Err(_) => {}
+                Err(_) => {
+                    return Ok(());
+                }
             }
             smc.add(stream, address, port).await;
             return Ok(());
         }
     };
-
-    // 转发数据
-    let (mut client_reader, mut client_writer) = stream.split();
-    let (mut target_reader, mut target_writer) = target_stream.split();
-
-    tokio::try_join!(
-        tokio::io::copy(&mut client_reader, &mut target_writer),
-        tokio::io::copy(&mut target_reader, &mut client_writer),
-    )?;
-
-    Ok(())
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -154,7 +186,10 @@ impl Config {
 
 #[derive(Serialize, Deserialize)]
 struct HashSetWrapper {
-    set: HashSet<String>,
+    // 走本地的域名
+    local: HashSet<String>,
+    // 走服务的域名
+    server: HashSet<String>,
 }
 
 pub fn tls_cert(cert: &[u8], name: &str) -> (TlsConnector, rustls::ServerName) {
@@ -183,7 +218,7 @@ pub fn tls_cert(cert: &[u8], name: &str) -> (TlsConnector, rustls::ServerName) {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     simple_logger::init_with_level(log::Level::Info).unwrap();
-    let server_domain_cfg = "server_domain.yml";
+    let domain_cache_cfg = "domain_cache.yml";
     let cfg = Config::from_file("s5client-config.yml");
     let mut cert = Vec::<u8>::new();
     match File::open(cfg.ssl_cert) {
@@ -201,45 +236,59 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let smc = tcpmuxclient::StreamMuxClient::init(tokio_rustls::TlsStream::Client(ctrl_conn)).await;
 
-    // 加载服务端缓存
-    let _server_domain = match std::fs::read_to_string(server_domain_cfg) {
+    // 加载缓存
+    let _domain_cache = match std::fs::read_to_string(domain_cache_cfg) {
         Ok(ymlstr) => {
             let wrapper: HashSetWrapper = serde_yaml::from_str(&ymlstr).expect("Unable to parse YAML");
-            wrapper.set
+            wrapper
         }
         Err(_) => {
-            HashSet::<String>::new()
+            HashSetWrapper{
+                local: HashSet::new(),
+                server: HashSet::new()
+            }
         }
     };
-    let mut _server_domain = Arc::new(RwLock::new(_server_domain));
-    let _server_domainc = _server_domain.clone();
+    let mut _domain_cache = Arc::new(RwLock::new(_domain_cache));
+    let _domain_cachec = _domain_cache.clone();
     if !cfg.full {
         tokio::spawn(async move {
             // 检测服务端域名是否新增，是的话写入文件
-            let mut _len = match _server_domainc.read() {
-                Ok(_r) => _r.len(),
-                Err(_) => 0,
+            let mut lens = match _domain_cachec.read() {
+                Ok(_cache) => {
+                    (_cache.local.len(), _cache.server.len())
+                }
+                Err(_) => {
+                    return;
+                }
             };
             loop {
                 tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                let _current_len = match _server_domainc.read() {
-                    Ok(_r) => _r.len(),
-                    Err(_) => 0,
+                let lens_temp = match _domain_cachec.read() {
+                    Ok(_cache) => {
+                        (_cache.local.len(), _cache.server.len())
+                    }
+                    Err(_) => {
+                        return;
+                    }
                 };
-                if _current_len == _len {
+                if lens == lens_temp {
                     continue;
                 }
-                _len = _current_len;
+                lens = lens_temp;
                 // 将 HashSet 包装到结构体中以进行序列化
-                match _server_domainc.read() {
+                match _domain_cachec.read() {
                     Ok(_data) => {
-                        let wrapper = HashSetWrapper { set: _data.clone() };
-    
+                        // let wrapper = HashSetWrapper { set: _data.clone() };
+                        let wrapper = HashSetWrapper {
+                            local: _data.local.clone(),
+                            server: _data.server.clone(),
+                        };
                         // 将数据序列化为 YAML 格式
                         let yaml_data = serde_yaml::to_string(&wrapper).unwrap();
             
                         // 将 YAML 数据写入文件
-                        if let Ok(mut file) = File::create(server_domain_cfg) {
+                        if let Ok(mut file) = File::create(domain_cache_cfg) {
                             let _ = file.write_all(yaml_data.as_bytes());
                         }
                     }
@@ -252,10 +301,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     loop {
         let (stream, _) = listener.accept().await?;
         let smcc = smc.clone();
-        let _server_domainc = _server_domain.clone();
+        let _domain_cachec = _domain_cache.clone();
         let full = cfg.full;
         tokio::spawn(async move {
-            if let Err(e) = handle_client(stream, smcc, _server_domainc, full).await {
+            if let Err(e) = handle_client(stream, smcc, _domain_cachec, full).await {
                 log::error!("{}->{}", line!(), e);
             }
         });

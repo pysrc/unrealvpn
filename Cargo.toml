@@ -1,5 +1,5 @@
 [workspace]
-
+resolver = "2"
 members = [
     "layer3to4",
     "tun2layer4",
