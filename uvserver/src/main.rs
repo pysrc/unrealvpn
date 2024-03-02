@@ -1,9 +1,9 @@
 use std::{fs::File, io::{BufReader, Cursor, Read}, sync::Arc};
 
 use serde::{Deserialize, Serialize};
-use tokio::net::TcpListener;
+use tcpmux::server::MuxServer;
+use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::{rustls, TlsAcceptor};
-mod tcpmuxserver;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Config {
@@ -86,7 +86,30 @@ async fn main() {
                             return;
                         }
                     };
-                    tcpmuxserver::start_mux(tokio_rustls::TlsStream::Server(ctrl_conn)).await;
+                    let mut mux_server = tcpmux::server::StreamMuxServer::init(ctrl_conn);
+                    loop {
+                        let (id, mut recv, send, vec_pool) = if let Some(_t) = mux_server.accept_channel().await {
+                            _t
+                        } else {
+                            log::info!("{} stream close.", line!());
+                            return;
+                        };
+                        tokio::spawn(async move {
+                            let _data = recv.recv().await.unwrap();
+                            // 解析地址
+                            let dst = String::from_utf8_lossy(&_data).to_string();
+                            log::info!("{} open dst {}", line!(), dst);
+                            match TcpStream::connect(&dst).await {
+                                Ok(stream) => {
+                                    tcpmux::bicopy(id, recv, send, stream, vec_pool.clone()).await;
+                                }
+                                Err(e) => {
+                                    log::error!("{} -> {} open dst error {}", line!(), dst, e);
+                                }
+                            }
+                            log::info!("{} close dst {}", line!(), dst);
+                        });
+                    }
                 });
             }
             Err(e) => {

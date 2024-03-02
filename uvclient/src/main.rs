@@ -1,9 +1,9 @@
 use std::{fs::File, io::{BufReader, Cursor, Read, Write}, net::Ipv4Addr, sync::Arc};
 
 use serde::{Deserialize, Serialize};
+use tcpmux::client::MuxClient;
 use tokio::net::TcpStream;
 use tokio_rustls::{rustls, webpki, TlsConnector};
-mod tcpmuxclient;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Config {
@@ -84,17 +84,21 @@ async fn main() {
         Some(cfg.routes),
     );
 
-    let smc = tcpmuxclient::StreamMuxClient::init(tokio_rustls::TlsStream::Client(ctrl_conn)).await;
+    let mut mux_client = tcpmux::client::StreamMuxClient::init(ctrl_conn);
 
     // 面向于inside端
     while let Ok(tcp_accept) = tun.accept_tcp() {
         log::info!("dst: {}", tcp_accept.dst);
-        let smcc = smc.clone();
+        let (id, recv, send, mut vec_pool) = mux_client.new_channel().await;
         tokio::spawn(async move {
             let conn = tcp_accept.stream.try_clone().unwrap();
             conn.set_nonblocking(true).unwrap();
             let src_stream = tokio::net::TcpStream::from_std(conn).unwrap();
-            smcc.add(src_stream, tcp_accept.dst.ip().to_string(), tcp_accept.dst.port()).await;
+            let mut _data = vec_pool.get().await;
+            let target = format!("{}:{}", tcp_accept.dst.ip().to_string(), tcp_accept.dst.port());
+            _data.extend(target.as_bytes());
+            send.send((tcpmux::cmd::PKG, id, _data)).unwrap();
+            tcpmux::bicopy(id, recv, send, src_stream, vec_pool).await;
         });
     }
 }

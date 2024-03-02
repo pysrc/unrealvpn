@@ -7,4 +7,5 @@ members = [
     "uvserver",
     "uvclient",
     "uvclient-socks5",
+    "tcpmux",
 ]

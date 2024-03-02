@@ -19,5 +19,7 @@ rustls-pemfile = "1.0.2"
 
 tun2layer4 = {path = "../tun2layer4"}
 
+tcpmux = { path = "../tcpmux" }
+
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"

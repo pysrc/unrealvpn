@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
+use tcpmux::client::MuxClient;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::time::timeout;
 use tokio_rustls::{rustls, webpki, TlsConnector};
 use std::collections::HashSet;
@@ -9,11 +11,13 @@ use std::fs::File;
 use std::io::{BufReader, Cursor, Read, Write};
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
-mod tcpmuxclient;
 
 async fn handle_client(
     mut stream: TcpStream, 
-    smc: tcpmuxclient::StreamMuxClient,
+    id: u64,
+    recv: UnboundedReceiver<Vec<u8>>,
+    send: UnboundedSender<(u8, u64, Vec<u8>)>,
+    mut vec_pool: tcpmux::pool::VecPool,
     _domain_cachec: Arc<RwLock<HashSetWrapper>>,
     full: bool,
 ) -> Result<(), Box<dyn Error>> {
@@ -71,10 +75,13 @@ async fn handle_client(
     // 响应连接请求
     stream.write_all(&[5, 0, 0, 1, 0, 0, 0, 0, 0, 0]).await?;
     
-    // up_stream(stream, address, port, mtx, _channel_mapc, _global_vec_poolc, _global_idc).await;
     if full {
         // 直接交给上游服务端解析
-        smc.add(stream, address, port).await;
+        let mut _data = vec_pool.get().await;
+        let target = format!("{}:{}", address, port);
+        _data.extend(target.as_bytes());
+        send.send((tcpmux::cmd::PKG, id, _data)).unwrap();
+        tcpmux::bicopy(id, recv, send, stream, vec_pool).await;
         return Ok(());
     }
     // 检查domain是远程还是本地解析
@@ -110,7 +117,11 @@ async fn handle_client(
     }
     if _domain_parse.1 {
         // 直接交给上游服务端解析
-        smc.add(stream, address, port).await;
+        let mut _data = vec_pool.get().await;
+        let target = format!("{}:{}", address, port);
+        _data.extend(target.as_bytes());
+        send.send((tcpmux::cmd::PKG, id, _data)).unwrap();
+        tcpmux::bicopy(id, recv, send, stream, vec_pool).await;
         return Ok(());
     }
     match timeout(std::time::Duration::from_millis(3000), TcpStream::connect((address.as_str(), port))).await {
@@ -151,7 +162,11 @@ async fn handle_client(
                     return Ok(());
                 }
             }
-            smc.add(stream, address, port).await;
+            let mut _data = vec_pool.get().await;
+            let target = format!("{}:{}", address, port);
+            _data.extend(target.as_bytes());
+            send.send((tcpmux::cmd::PKG, id, _data)).unwrap();
+            tcpmux::bicopy(id, recv, send, stream, vec_pool).await;
             return Ok(());
         }
     };
@@ -234,7 +249,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let listener = TcpListener::bind(&cfg.bind).await?;
     log::info!("bind on: {}", cfg.bind);
 
-    let smc = tcpmuxclient::StreamMuxClient::init(tokio_rustls::TlsStream::Client(ctrl_conn)).await;
+    let mut mux_client = tcpmux::client::StreamMuxClient::init(ctrl_conn);
 
     // 加载缓存
     let _domain_cache = match std::fs::read_to_string(domain_cache_cfg) {
@@ -300,11 +315,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     
     loop {
         let (stream, _) = listener.accept().await?;
-        let smcc = smc.clone();
         let _domain_cachec = _domain_cache.clone();
         let full = cfg.full;
+        let (id, recv, send, vec_pool) = mux_client.new_channel().await;
         tokio::spawn(async move {
-            if let Err(e) = handle_client(stream, smcc, _domain_cachec, full).await {
+            if let Err(e) = handle_client(stream, id, recv, send, vec_pool, _domain_cachec, full).await {
                 log::error!("{}->{}", line!(), e);
             }
         });
