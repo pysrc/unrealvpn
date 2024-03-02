@@ -39,9 +39,6 @@ where IO: AsyncReadExt + AsyncWriteExt + Unpin + Send + AsyncRead + AsyncWrite +
                         // 关闭连接
                         break;
                     }
-                    unsafe {
-                        _data.set_len(_len);
-                    }
                     if let Err(e) = send.send((cmd::PKG, id, _data)) {
                         log::error!("{} -> {}", line!(), e);
                         break;

@@ -42,6 +42,7 @@ impl<IO> MuxClient<IO> for StreamMuxClient<IO>
         let (main_sender, mut main_receiver) = unbounded_channel::<(u8, u64, Vec<u8>)>();
 
         let work_sender_mapc = work_sender_map.clone();
+        let main_senderc = main_sender.clone();
         tokio::spawn(async move {
             let mut main_recv_data = use_pool.get().await;
             loop {
@@ -60,14 +61,18 @@ impl<IO> MuxClient<IO> for StreamMuxClient<IO>
                                     stream.read_exact(&mut main_recv_data).await.unwrap();
                                 }
                                 match main_recv_cmd {
+                                    cmd::HART => {
+                                        log::info!("{} hart from server", line!());
+                                        continue;
+                                    }
                                     // 收到数据包
                                     cmd::PKG => {
                                         let mut work_sender_map_unlock = work_sender_mapc.lock().await;
                                         match work_sender_map_unlock.get_mut(&main_recv_id) {
                                             Some(work_sender) => {
-                                                if let Err(_) = work_sender.send(main_recv_data) {
+                                                if let Err(e) = work_sender.send(main_recv_data) {
                                                     // work通道关闭
-                                                    log::info!("{} work channel close.", line!());
+                                                    log::info!("{} work channel close {}", line!(), e);
                                                     work_sender_map_unlock.remove(&main_recv_id);
                                                     // 发送断开连接信号
                                                     stream.write_u8(cmd::BREAK).await.unwrap();
@@ -136,6 +141,10 @@ impl<IO> MuxClient<IO> for StreamMuxClient<IO>
                             log::info!("{} master channel close.", line!());
                             return;
                         }
+                    },
+                    // 发送心跳包
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {
+                        main_senderc.send((cmd::HART, 0, use_pool.get().await)).unwrap();
                     }
                 }
             }

@@ -17,15 +17,12 @@ pub trait MuxServer<IO> {
     fn get_vec(&mut self) -> impl std::future::Future<Output = Vec<u8>> + Send;
     // 将数据返回数组池
     fn back_vec(&mut self, data: Vec<u8>) -> impl std::future::Future<Output = ()> + Send;
-    // 关闭通道
-    fn break_channel(&mut self, id: u64) -> impl std::future::Future<Output = ()> + Send;
 }
 
 pub struct StreamMuxServer<IO> {
     phantom: PhantomData<IO>,
     vec_pool: VecPool,
     receiver: UnboundedReceiver<(u64, UReceiver, MainSender)>,
-    main_sender: MainSender,
 }
 
 impl<IO> MuxServer<IO> for StreamMuxServer<IO>
@@ -37,7 +34,6 @@ impl<IO> MuxServer<IO> for StreamMuxServer<IO>
         let mut use_pool = vec_pool.clone();
         // 接收发送到主连接的数据
         let (main_sender, mut main_receiver) = unbounded_channel::<(u8, u64, Vec<u8>)>();
-        let main_senderc = main_sender.clone();
         tokio::spawn(async move {
             let mut work_sender_map = HashMap::new();
             let mut main_recv_data = use_pool.get().await;
@@ -60,13 +56,14 @@ impl<IO> MuxServer<IO> for StreamMuxServer<IO>
                                 match main_recv_cmd {
                                     // 心跳
                                     cmd::HART => {
+                                        log::info!("{} hart from client", line!());
                                         continue;
                                     }
                                     // 开启新通道
                                     cmd::NEWBI => {
                                         // 接收发送到工作通道的数据
                                         let (work_sender, work_receiver) = unbounded_channel::<Vec<u8>>();
-                                        sender.send((main_recv_id, work_receiver, main_senderc.clone())).unwrap();
+                                        sender.send((main_recv_id, work_receiver, main_sender.clone())).unwrap();
                                         work_sender_map.insert(main_recv_id, work_sender);
                                         log::info!("{} new channel {}", line!(), main_recv_id);
                                     }
@@ -88,8 +85,6 @@ impl<IO> MuxServer<IO> for StreamMuxServer<IO>
                                             None => {
                                                 // 未知ID
                                                 log::info!("{} undefine id {}", line!(), main_recv_id);
-                                                // todo 删除
-                                                return;
                                             }
                                         }
                                         
@@ -146,6 +141,10 @@ impl<IO> MuxServer<IO> for StreamMuxServer<IO>
                             log::info!("{} master channel close.", line!());
                             return;
                         }
+                    },
+                    // 发送心跳包
+                    _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {
+                        main_sender.send((cmd::HART, 0, use_pool.get().await)).unwrap();
                     }
                 }
             }
@@ -154,7 +153,6 @@ impl<IO> MuxServer<IO> for StreamMuxServer<IO>
             phantom: PhantomData,
             vec_pool,
             receiver,
-            main_sender,
         }
     }
     
@@ -173,11 +171,5 @@ impl<IO> MuxServer<IO> for StreamMuxServer<IO>
     
     async fn back_vec(&mut self, data: Vec<u8>) {
         self.vec_pool.push(data).await;
-    }
-    
-    async fn break_channel(&mut self, id: u64) {
-        let data = self.get_vec().await;
-        // 发信给客户端断开channel
-        self.main_sender.send((cmd::BREAK, id, data)).unwrap();
     }
 }

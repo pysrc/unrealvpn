@@ -108,6 +108,7 @@ async fn main() {
                             log::info!("{} open dst {}", line!(), dst);
                             match TcpStream::connect(&dst).await {
                                 Ok(stream) => {
+                                    log::info!("{} open dst success {}", line!(), dst);
                                     tcpmux::bicopy(id, recv, send, stream, vec_pool.clone()).await;
                                 }
                                 Err(e) => {
