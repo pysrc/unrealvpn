@@ -16,7 +16,7 @@ async fn handle_client(
     mut stream: TcpStream, 
     id: u64,
     recv: UnboundedReceiver<Vec<u8>>,
-    send: UnboundedSender<(u8, u64, Vec<u8>)>,
+    send: UnboundedSender<(u8, u64, Option<Vec<u8>>)>,
     mut vec_pool: tcpmux::pool::VecPool,
     _domain_cachec: Arc<RwLock<HashSetWrapper>>,
     full: bool,
@@ -80,7 +80,7 @@ async fn handle_client(
         let mut _data = vec_pool.get().await;
         let target = format!("{}:{}", address, port);
         _data.extend(target.as_bytes());
-        send.send((tcpmux::cmd::PKG, id, _data)).unwrap();
+        send.send((tcpmux::cmd::PKG, id, Some(_data))).unwrap();
         tcpmux::bicopy(id, recv, send, stream, vec_pool).await;
         return Ok(());
     }
@@ -120,7 +120,7 @@ async fn handle_client(
         let mut _data = vec_pool.get().await;
         let target = format!("{}:{}", address, port);
         _data.extend(target.as_bytes());
-        send.send((tcpmux::cmd::PKG, id, _data)).unwrap();
+        send.send((tcpmux::cmd::PKG, id, Some(_data))).unwrap();
         tcpmux::bicopy(id, recv, send, stream, vec_pool).await;
         return Ok(());
     }
@@ -165,7 +165,7 @@ async fn handle_client(
             let mut _data = vec_pool.get().await;
             let target = format!("{}:{}", address, port);
             _data.extend(target.as_bytes());
-            send.send((tcpmux::cmd::PKG, id, _data)).unwrap();
+            send.send((tcpmux::cmd::PKG, id, Some(_data))).unwrap();
             tcpmux::bicopy(id, recv, send, stream, vec_pool).await;
             return Ok(());
         }

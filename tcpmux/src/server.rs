@@ -6,7 +6,7 @@ use tokio::{io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt}, select, sy
 use crate::{pool::VecPool, cmd};
 
 type UReceiver = UnboundedReceiver<Vec<u8>>;
-type MainSender = UnboundedSender<(u8, u64, Vec<u8>)>;
+type MainSender = UnboundedSender<(u8, u64, Option<Vec<u8>>)>;
 
 pub trait MuxServer<IO> {
     // 初始化
@@ -33,7 +33,7 @@ impl<IO> MuxServer<IO> for StreamMuxServer<IO>
         let vec_pool = VecPool::new();
         let mut use_pool = vec_pool.clone();
         // 接收发送到主连接的数据
-        let (main_sender, mut main_receiver) = unbounded_channel::<(u8, u64, Vec<u8>)>();
+        let (main_sender, mut main_receiver) = unbounded_channel::<(u8, u64, Option<Vec<u8>>)>();
         tokio::spawn(async move {
             let mut work_sender_map = HashMap::new();
             let mut main_recv_data = use_pool.get().await;
@@ -116,11 +116,15 @@ impl<IO> MuxServer<IO> for StreamMuxServer<IO>
                         Some((_cmd, _id, _data)) => {
                             stream.write_u8(_cmd).await.unwrap();
                             stream.write_u64(_id).await.unwrap();
-                            if _data.len() == 0 {
-                                stream.write_u32(0).await.unwrap();
-                            } else {
-                                stream.write_u32(_data.len() as u32).await.unwrap();
-                                stream.write_all(&_data).await.unwrap();
+                            match _data {
+                                Some(_data) => {
+                                    stream.write_u32(_data.len() as u32).await.unwrap();
+                                    stream.write_all(&_data).await.unwrap();
+                                    use_pool.push(_data).await;
+                                }
+                                None => {
+                                    stream.write_u32(0).await.unwrap();
+                                }
                             }
                             if _cmd == cmd::BREAK {
                                 // 关闭本地channel
@@ -144,7 +148,7 @@ impl<IO> MuxServer<IO> for StreamMuxServer<IO>
                     },
                     // 发送心跳包
                     _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {
-                        main_sender.send((cmd::HART, 0, use_pool.get().await)).unwrap();
+                        main_sender.send((cmd::HART, 0, None)).unwrap();
                     }
                 }
             }

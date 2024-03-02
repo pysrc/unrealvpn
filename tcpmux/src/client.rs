@@ -6,7 +6,7 @@ use tokio::{io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt}, select, sy
 use crate::{cmd, pool::VecPool};
 
 type UReceiver = UnboundedReceiver<Vec<u8>>;
-type MainSender = UnboundedSender<(u8, u64, Vec<u8>)>;
+type MainSender = UnboundedSender<(u8, u64, Option<Vec<u8>>)>;
 
 pub trait MuxClient<IO> {
     // 初始化
@@ -39,7 +39,7 @@ impl<IO> MuxClient<IO> for StreamMuxClient<IO>
         // 
         let work_sender_map = Arc::new(Mutex::new(HashMap::<u64, UnboundedSender<Vec<u8>>>::new()));
         // 接收发送到主连接的数据
-        let (main_sender, mut main_receiver) = unbounded_channel::<(u8, u64, Vec<u8>)>();
+        let (main_sender, mut main_receiver) = unbounded_channel::<(u8, u64, Option<Vec<u8>>)>();
 
         let work_sender_mapc = work_sender_map.clone();
         let main_senderc = main_sender.clone();
@@ -116,11 +116,15 @@ impl<IO> MuxClient<IO> for StreamMuxClient<IO>
                         Some((_cmd, _id, _data)) => {
                             stream.write_u8(_cmd).await.unwrap();
                             stream.write_u64(_id).await.unwrap();
-                            if _data.len() == 0 {
-                                stream.write_u32(0).await.unwrap();
-                            } else {
-                                stream.write_u32(_data.len() as u32).await.unwrap();
-                                stream.write_all(&_data).await.unwrap();
+                            match _data {
+                                Some(_data) => {
+                                    stream.write_u32(_data.len() as u32).await.unwrap();
+                                    stream.write_all(&_data).await.unwrap();
+                                    use_pool.push(_data).await;
+                                }
+                                None => {
+                                    stream.write_u32(0).await.unwrap();
+                                }
                             }
                             if _cmd == cmd::BREAK {
                                 // 关闭本地channel
@@ -144,7 +148,7 @@ impl<IO> MuxClient<IO> for StreamMuxClient<IO>
                     },
                     // 发送心跳包
                     _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {
-                        main_senderc.send((cmd::HART, 0, use_pool.get().await)).unwrap();
+                        main_senderc.send((cmd::HART, 0, None)).unwrap();
                     }
                 }
             }
@@ -163,7 +167,7 @@ impl<IO> MuxClient<IO> for StreamMuxClient<IO>
         let id = self.id_generator.fetch_add(1, Ordering::Relaxed);
         let (work_sender, work_receiver) = unbounded_channel::<Vec<u8>>();
         self.work_sender_map.lock().await.insert(id, work_sender);
-        main_sender.send((cmd::NEWBI, id, self.get_vec().await)).unwrap();
+        main_sender.send((cmd::NEWBI, id, None)).unwrap();
         log::info!("{} new channel {}", line!(), id);
         return (id, work_receiver, main_sender, self.vec_pool.clone());
     }
@@ -177,8 +181,7 @@ impl<IO> MuxClient<IO> for StreamMuxClient<IO>
     }
     
     async fn break_channel(&mut self, id: u64) {
-        let data = self.get_vec().await;
         // 发信给服务端断开channel
-        self.main_sender.send((cmd::BREAK, id, data)).unwrap();
+        self.main_sender.send((cmd::BREAK, id, None)).unwrap();
     }
 }

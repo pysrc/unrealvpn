@@ -24,7 +24,7 @@ pub mod cmd {
 pub async fn bicopy<IO>(
     id: u64,
     mut recv: UnboundedReceiver<Vec<u8>>,
-    send: UnboundedSender<(u8, u64, Vec<u8>)>,
+    send: UnboundedSender<(u8, u64, Option<Vec<u8>>)>,
     mut stream: IO,
     mut vec_pool: pool::VecPool,
 )
@@ -39,7 +39,7 @@ where IO: AsyncReadExt + AsyncWriteExt + Unpin + Send + AsyncRead + AsyncWrite +
                         // 关闭连接
                         break;
                     }
-                    if let Err(e) = send.send((cmd::PKG, id, _data)) {
+                    if let Err(e) = send.send((cmd::PKG, id, Some(_data))) {
                         log::error!("{} -> {}", line!(), e);
                         break;
                     }
@@ -70,6 +70,5 @@ where IO: AsyncReadExt + AsyncWriteExt + Unpin + Send + AsyncRead + AsyncWrite +
     }
     _ = stream.flush().await;
     _ = stream.shutdown().await;
-    let data = vec_pool.get().await;
-    _ = send.send((cmd::BREAK, id, data));
+    _ = send.send((cmd::BREAK, id, None));
 }

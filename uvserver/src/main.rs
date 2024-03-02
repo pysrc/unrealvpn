@@ -88,7 +88,7 @@ async fn main() {
                     };
                     let mut mux_server = tcpmux::server::StreamMuxServer::init(ctrl_conn);
                     loop {
-                        let (id, mut recv, send, mut vec_pool) = if let Some(_t) = mux_server.accept_channel().await {
+                        let (id, mut recv, send, vec_pool) = if let Some(_t) = mux_server.accept_channel().await {
                             _t
                         } else {
                             log::info!("{} stream close.", line!());
@@ -113,8 +113,7 @@ async fn main() {
                                 }
                                 Err(e) => {
                                     log::error!("{} -> {} open dst error {}", line!(), dst, e);
-                                    let mut _data = vec_pool.get().await;
-                                    send.send((cmd::BREAK, id, _data)).unwrap();
+                                    send.send((cmd::BREAK, id, None)).unwrap();
                                 }
                             }
                             
