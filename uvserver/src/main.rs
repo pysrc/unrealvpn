@@ -1,7 +1,7 @@
 use std::{fs::File, io::{BufReader, Cursor, Read}, sync::Arc};
 
 use serde::{Deserialize, Serialize};
-use tcpmux::server::MuxServer;
+use tcpmux::{cmd, server::MuxServer};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::{rustls, TlsAcceptor};
 
@@ -88,14 +88,21 @@ async fn main() {
                     };
                     let mut mux_server = tcpmux::server::StreamMuxServer::init(ctrl_conn);
                     loop {
-                        let (id, mut recv, send, vec_pool) = if let Some(_t) = mux_server.accept_channel().await {
+                        let (id, mut recv, send, mut vec_pool) = if let Some(_t) = mux_server.accept_channel().await {
                             _t
                         } else {
                             log::info!("{} stream close.", line!());
                             return;
                         };
                         tokio::spawn(async move {
-                            let _data = recv.recv().await.unwrap();
+
+                            let _data = match recv.recv().await {
+                                Some(_d) => _d,
+                                None => {
+                                    log::info!("{} recv close {}", line!(), id);
+                                    return;
+                                }
+                            };
                             // 解析地址
                             let dst = String::from_utf8_lossy(&_data).to_string();
                             log::info!("{} open dst {}", line!(), dst);
@@ -105,8 +112,11 @@ async fn main() {
                                 }
                                 Err(e) => {
                                     log::error!("{} -> {} open dst error {}", line!(), dst, e);
+                                    let mut _data = vec_pool.get().await;
+                                    send.send((cmd::BREAK, id, _data)).unwrap();
                                 }
                             }
+                            
                             log::info!("{} close dst {}", line!(), dst);
                         });
                     }

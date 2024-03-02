@@ -68,6 +68,7 @@ impl<IO> MuxServer<IO> for StreamMuxServer<IO>
                                         let (work_sender, work_receiver) = unbounded_channel::<Vec<u8>>();
                                         sender.send((main_recv_id, work_receiver, main_senderc.clone())).unwrap();
                                         work_sender_map.insert(main_recv_id, work_sender);
+                                        log::info!("{} new channel {}", line!(), main_recv_id);
                                     }
                                     // 收到数据包
                                     cmd::PKG => {

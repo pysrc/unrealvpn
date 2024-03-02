@@ -74,5 +74,5 @@ where IO: AsyncReadExt + AsyncWriteExt + Unpin + Send + AsyncRead + AsyncWrite +
     _ = stream.flush().await;
     _ = stream.shutdown().await;
     let data = vec_pool.get().await;
-    send.send((cmd::BREAK, id, data)).unwrap();
+    _ = send.send((cmd::BREAK, id, data));
 }

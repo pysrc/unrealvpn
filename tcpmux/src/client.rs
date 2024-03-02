@@ -155,6 +155,7 @@ impl<IO> MuxClient<IO> for StreamMuxClient<IO>
         let (work_sender, work_receiver) = unbounded_channel::<Vec<u8>>();
         self.work_sender_map.lock().await.insert(id, work_sender);
         main_sender.send((cmd::NEWBI, id, self.get_vec().await)).unwrap();
+        log::info!("{} new channel {}", line!(), id);
         return (id, work_receiver, main_sender, self.vec_pool.clone());
     }
 
