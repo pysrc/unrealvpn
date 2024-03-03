@@ -1,6 +1,6 @@
 use std::{collections::HashMap, marker::PhantomData, sync::{atomic::{AtomicU64, Ordering}, Arc}};
 
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, select, sync::{mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, Mutex}};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, select, sync::{mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, Mutex}, time};
 
 
 use crate::{cmd, pool::VecPool};
@@ -39,6 +39,7 @@ impl<IO> MuxClient<IO> for StreamMuxClient<IO>
         let main_senderc = main_sender.clone();
         tokio::spawn(async move {
             let mut main_recv_data = use_pool.get().await;
+            let mut timer = time::interval(time::Duration::from_secs(30));
             loop {
                 select!{
                     _command_op = stream.read_u8() => {
@@ -141,7 +142,7 @@ impl<IO> MuxClient<IO> for StreamMuxClient<IO>
                         }
                     },
                     // 发送心跳包
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {
+                    _ = timer.tick() => {
                         main_senderc.send((cmd::HART, 0, None)).unwrap();
                     }
                 }
