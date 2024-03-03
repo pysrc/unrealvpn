@@ -1,6 +1,6 @@
 use std::{collections::HashMap, marker::PhantomData};
 
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, select, sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, time};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, select, sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}};
 
 
 use crate::{pool::VecPool, cmd};
@@ -33,7 +33,6 @@ impl<IO> MuxServer<IO> for StreamMuxServer<IO>
         tokio::spawn(async move {
             let mut work_sender_map = HashMap::new();
             let mut main_recv_data = use_pool.get().await;
-            let mut timer = time::interval(time::Duration::from_secs(30));
             loop {
                 select!{
                     _command_op = stream.read_u8() => {
@@ -54,6 +53,8 @@ impl<IO> MuxServer<IO> for StreamMuxServer<IO>
                                     // 心跳
                                     cmd::HART => {
                                         log::info!("{} hart from client", line!());
+                                        // 响应心跳包
+                                        main_sender.send((cmd::HART, 0, None)).unwrap();
                                         continue;
                                     }
                                     // 开启新通道
@@ -143,10 +144,6 @@ impl<IO> MuxServer<IO> for StreamMuxServer<IO>
                             return;
                         }
                     },
-                    // 发送心跳包
-                    _ = timer.tick() => {
-                        main_sender.send((cmd::HART, 0, None)).unwrap();
-                    }
                 }
             }
         });

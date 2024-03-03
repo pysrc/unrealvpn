@@ -40,6 +40,7 @@ impl<IO> MuxClient<IO> for StreamMuxClient<IO>
         tokio::spawn(async move {
             let mut main_recv_data = use_pool.get().await;
             let mut timer = time::interval(time::Duration::from_secs(30));
+            let mut hart_back = true;
             loop {
                 select!{
                     _command_op = stream.read_u8() => {
@@ -58,6 +59,7 @@ impl<IO> MuxClient<IO> for StreamMuxClient<IO>
                                 match main_recv_cmd {
                                     cmd::HART => {
                                         log::info!("{} hart from server", line!());
+                                        hart_back = true;
                                         continue;
                                     }
                                     // 收到数据包
@@ -143,7 +145,13 @@ impl<IO> MuxClient<IO> for StreamMuxClient<IO>
                     },
                     // 发送心跳包
                     _ = timer.tick() => {
+                        if !hart_back {
+                            // 心跳响应超时
+                            log::error!("watch dog wang wang wang ~");
+                            return;
+                        }
                         main_senderc.send((cmd::HART, 0, None)).unwrap();
+                        hart_back = false;
                     }
                 }
             }
