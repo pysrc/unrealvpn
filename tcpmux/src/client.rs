@@ -1,6 +1,6 @@
 use std::{collections::HashMap, marker::PhantomData, sync::{atomic::{AtomicU64, Ordering}, Arc}};
 
-use tokio::{io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt}, select, sync::{mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, Mutex}};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, select, sync::{mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, Mutex}};
 
 
 use crate::{cmd, pool::VecPool};
@@ -13,12 +13,6 @@ pub trait MuxClient<IO> {
     fn init(stream: IO) -> Self;
     // 开启新通道
     fn new_channel(&mut self) -> impl std::future::Future<Output = (u64, UReceiver, MainSender, VecPool)> + Send;
-    // 从数据池获取
-    fn get_vec(&mut self) -> impl std::future::Future<Output = Vec<u8>> + Send;
-    // 将数据返回数组池
-    fn back_vec(&mut self, data: Vec<u8>) -> impl std::future::Future<Output = ()> + Send;
-    // 关闭通道
-    fn break_channel(&mut self, id: u64) -> impl std::future::Future<Output = ()> + Send;
 }
 
 pub struct StreamMuxClient<IO> {
@@ -30,7 +24,7 @@ pub struct StreamMuxClient<IO> {
 }
 
 impl<IO> MuxClient<IO> for StreamMuxClient<IO>
-    where IO: AsyncReadExt + AsyncWriteExt + Unpin + Send + AsyncRead + AsyncWrite + 'static
+    where IO: AsyncReadExt + AsyncWriteExt + Unpin + Send + 'static
 {
     fn init(mut stream: IO) -> Self {
         let vec_pool = VecPool::new();
@@ -170,18 +164,5 @@ impl<IO> MuxClient<IO> for StreamMuxClient<IO>
         main_sender.send((cmd::NEWBI, id, None)).unwrap();
         log::info!("{} new channel {}", line!(), id);
         return (id, work_receiver, main_sender, self.vec_pool.clone());
-    }
-
-    async fn get_vec(&mut self) -> Vec<u8> {
-        self.vec_pool.get().await
-    }
-    
-    async fn back_vec(&mut self, data: Vec<u8>) {
-        self.vec_pool.push(data).await;
-    }
-    
-    async fn break_channel(&mut self, id: u64) {
-        // 发信给服务端断开channel
-        self.main_sender.send((cmd::BREAK, id, None)).unwrap();
     }
 }

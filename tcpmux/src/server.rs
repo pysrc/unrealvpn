@@ -1,6 +1,6 @@
 use std::{collections::HashMap, marker::PhantomData};
 
-use tokio::{io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt}, select, sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, select, sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}};
 
 
 use crate::{pool::VecPool, cmd};
@@ -13,10 +13,6 @@ pub trait MuxServer<IO> {
     fn init(stream: IO) -> Self;
     // 接收新通道
     fn accept_channel(&mut self) -> impl std::future::Future<Output = Option<(u64, UReceiver, MainSender, VecPool)>> + Send;
-    // 从数据池获取
-    fn get_vec(&mut self) -> impl std::future::Future<Output = Vec<u8>> + Send;
-    // 将数据返回数组池
-    fn back_vec(&mut self, data: Vec<u8>) -> impl std::future::Future<Output = ()> + Send;
 }
 
 pub struct StreamMuxServer<IO> {
@@ -26,7 +22,7 @@ pub struct StreamMuxServer<IO> {
 }
 
 impl<IO> MuxServer<IO> for StreamMuxServer<IO>
-    where IO: AsyncReadExt + AsyncWriteExt + Unpin + Send + AsyncRead + AsyncWrite + 'static
+    where IO: AsyncReadExt + AsyncWriteExt + Unpin + Send + 'static
 {
     fn init(mut stream: IO) -> Self {
         let (sender, receiver) = unbounded_channel();
@@ -167,13 +163,5 @@ impl<IO> MuxServer<IO> for StreamMuxServer<IO>
             None
         }
         
-    }
-    
-    async fn get_vec(&mut self) -> Vec<u8> {
-        self.vec_pool.get().await
-    }
-    
-    async fn back_vec(&mut self, data: Vec<u8>) {
-        self.vec_pool.push(data).await;
     }
 }
