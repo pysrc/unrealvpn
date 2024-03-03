@@ -1,16 +1,16 @@
 use std::{collections::HashMap, marker::PhantomData, sync::{atomic::{AtomicU64, Ordering}, Arc}};
 
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, select, sync::{mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}, Mutex}, time};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, select, sync::{mpsc, oneshot, Mutex}, time};
 
 
 use crate::{cmd, pool::VecPool};
 
-type UReceiver = UnboundedReceiver<Vec<u8>>;
-type MainSender = UnboundedSender<(u8, u64, Option<Vec<u8>>)>;
+type UReceiver = mpsc::UnboundedReceiver<Vec<u8>>;
+type MainSender = mpsc::UnboundedSender<(u8, u64, Option<Vec<u8>>)>;
 
 pub trait MuxClient<IO> {
     // 初始化
-    fn init(stream: IO) -> Self;
+    fn init(stream: IO) -> (Self, oneshot::Receiver<()>) where Self: Sized;
     // 开启新通道
     fn new_channel(&mut self) -> impl std::future::Future<Output = (u64, UReceiver, MainSender, VecPool)> + Send;
 }
@@ -18,7 +18,7 @@ pub trait MuxClient<IO> {
 pub struct StreamMuxClient<IO> {
     phantom: PhantomData<IO>,
     vec_pool: VecPool,
-    work_sender_map: Arc<Mutex<HashMap<u64, UnboundedSender<Vec<u8>>>>>,
+    work_sender_map: Arc<Mutex<HashMap<u64, mpsc::UnboundedSender<Vec<u8>>>>>,
     main_sender: MainSender,
     id_generator: AtomicU64
 }
@@ -26,18 +26,20 @@ pub struct StreamMuxClient<IO> {
 impl<IO> MuxClient<IO> for StreamMuxClient<IO>
     where IO: AsyncReadExt + AsyncWriteExt + Unpin + Send + 'static
 {
-    fn init(mut stream: IO) -> Self {
+    fn init(mut stream: IO) -> (Self, oneshot::Receiver<()>) {
         let vec_pool = VecPool::new();
         let id_generator = AtomicU64::new(0);
         let mut use_pool = vec_pool.clone();
+        // 断线通道
+        let (stop_send, stop_recv) = oneshot::channel::<()>();
         // 
-        let work_sender_map = Arc::new(Mutex::new(HashMap::<u64, UnboundedSender<Vec<u8>>>::new()));
+        let work_sender_map = Arc::new(Mutex::new(HashMap::<u64, mpsc::UnboundedSender<Vec<u8>>>::new()));
         // 接收发送到主连接的数据
-        let (main_sender, mut main_receiver) = unbounded_channel::<(u8, u64, Option<Vec<u8>>)>();
+        let (main_sender, mut main_receiver) = mpsc::unbounded_channel::<(u8, u64, Option<Vec<u8>>)>();
 
         let work_sender_mapc = work_sender_map.clone();
         let main_senderc = main_sender.clone();
-        tokio::spawn(async move {
+        let rt = tokio::spawn(async move {
             let mut main_recv_data = use_pool.get().await;
             let mut timer = time::interval(time::Duration::from_secs(30));
             let mut hart_back = true;
@@ -156,19 +158,24 @@ impl<IO> MuxClient<IO> for StreamMuxClient<IO>
                 }
             }
         });
-        Self {
+        tokio::spawn(async move {
+            _ = rt.await;
+            stop_send.send(()).unwrap();
+        });
+        (Self {
             phantom: PhantomData,
             vec_pool,
             work_sender_map,
             main_sender,
             id_generator
-        }
+        },
+        stop_recv)
     }
 
     async fn new_channel(&mut self) -> (u64, UReceiver, MainSender, VecPool) {
         let main_sender = self.main_sender.clone();
         let id = self.id_generator.fetch_add(1, Ordering::Relaxed);
-        let (work_sender, work_receiver) = unbounded_channel::<Vec<u8>>();
+        let (work_sender, work_receiver) = mpsc::unbounded_channel::<Vec<u8>>();
         self.work_sender_map.lock().await.insert(id, work_sender);
         main_sender.send((cmd::NEWBI, id, None)).unwrap();
         log::info!("{} new channel {}", line!(), id);

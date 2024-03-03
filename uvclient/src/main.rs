@@ -84,7 +84,7 @@ async fn main() {
         Some(cfg.routes),
     );
 
-    let mut mux_client = tcpmux::client::StreamMuxClient::init(ctrl_conn);
+    let (mut mux_client, _) = tcpmux::client::StreamMuxClient::init(ctrl_conn);
 
     // 面向于inside端
     while let Ok(tcp_accept) = tun.accept_tcp() {
