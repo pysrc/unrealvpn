@@ -1,5 +1,6 @@
+use channel_mux_with_stream::client::{MuxClient, StreamMuxClient};
+use channel_mux_with_stream::{bicopy, cmd, pool};
 use serde::{Deserialize, Serialize};
-use tcpmux::client::MuxClient;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -20,7 +21,7 @@ async fn handle_client(
     id: u64,
     recv: UnboundedReceiver<Vec<u8>>,
     send: UnboundedSender<(u8, u64, Option<Vec<u8>>)>,
-    mut vec_pool: tcpmux::pool::VecPool,
+    mut vec_pool: pool::VecPool,
     _domain_cachec: Arc<RwLock<HashSetWrapper>>,
     full: bool,
 ) -> Result<(), Box<dyn Error>> {
@@ -83,8 +84,8 @@ async fn handle_client(
         let mut _data = vec_pool.get().await;
         let target = format!("{}:{}", address, port);
         _data.extend(target.as_bytes());
-        send.send((tcpmux::cmd::PKG, id, Some(_data))).unwrap();
-        tcpmux::bicopy(id, recv, send, stream, vec_pool).await;
+        send.send((cmd::PKG, id, Some(_data))).unwrap();
+        bicopy(id, recv, send, stream, vec_pool).await;
         return Ok(());
     }
     // 检查domain是远程还是本地解析
@@ -123,8 +124,8 @@ async fn handle_client(
         let mut _data = vec_pool.get().await;
         let target = format!("{}:{}", address, port);
         _data.extend(target.as_bytes());
-        send.send((tcpmux::cmd::PKG, id, Some(_data))).unwrap();
-        tcpmux::bicopy(id, recv, send, stream, vec_pool).await;
+        send.send((cmd::PKG, id, Some(_data))).unwrap();
+        bicopy(id, recv, send, stream, vec_pool).await;
         return Ok(());
     }
     match timeout(std::time::Duration::from_millis(3000), TcpStream::connect((address.as_str(), port))).await {
@@ -168,8 +169,8 @@ async fn handle_client(
             let mut _data = vec_pool.get().await;
             let target = format!("{}:{}", address, port);
             _data.extend(target.as_bytes());
-            send.send((tcpmux::cmd::PKG, id, Some(_data))).unwrap();
-            tcpmux::bicopy(id, recv, send, stream, vec_pool).await;
+            send.send((cmd::PKG, id, Some(_data))).unwrap();
+            bicopy(id, recv, send, stream, vec_pool).await;
             return Ok(());
         }
     };
@@ -265,7 +266,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let listener = TcpListener::bind(&cfg.bind).await?;
     log::info!("bind on: {}", cfg.bind);
 
-    let (mut mux_client, stop_recv) = tcpmux::client::StreamMuxClient::init(ctrl_conn);
+    let (mut mux_client, stop_recv) = StreamMuxClient::init(ctrl_conn);
 
     // 加载缓存
     let _domain_cache = match std::fs::read_to_string(domain_cache_cfg) {

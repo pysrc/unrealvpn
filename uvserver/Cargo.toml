@@ -15,4 +15,4 @@ tokio = { version = "1", features = ["full"] }
 tokio-rustls = { version = "0.23.4" }
 rustls-pemfile = "1.0.2"
 
-tcpmux = { path = "../tcpmux" }
+channel-mux-with-stream = { git = "https://github.com/pysrc/channel-mux-with-stream.git" }

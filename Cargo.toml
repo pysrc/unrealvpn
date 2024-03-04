@@ -1,11 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "layer3to4",
-    "tun2layer4",
     "uvcertificate",
     "uvserver",
     "uvclient",
     "uvclient-socks5",
-    "tcpmux",
 ]

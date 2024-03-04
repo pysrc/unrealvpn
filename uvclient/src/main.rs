@@ -1,7 +1,7 @@
 use std::{fs::File, io::{BufReader, Cursor, Read, Write}, net::Ipv4Addr, sync::Arc};
 
+use channel_mux_with_stream::{bicopy, client::{MuxClient, StreamMuxClient}, cmd};
 use serde::{Deserialize, Serialize};
-use tcpmux::client::MuxClient;
 use tokio::net::TcpStream;
 use tokio_rustls::{rustls, webpki, TlsConnector};
 
@@ -84,7 +84,7 @@ async fn main() {
         Some(cfg.routes),
     );
 
-    let (mut mux_client, _) = tcpmux::client::StreamMuxClient::init(ctrl_conn);
+    let (mut mux_client, _) = StreamMuxClient::init(ctrl_conn);
 
     // 面向于inside端
     while let Ok(tcp_accept) = tun.accept_tcp() {
@@ -97,8 +97,8 @@ async fn main() {
             let mut _data = vec_pool.get().await;
             let target = format!("{}:{}", tcp_accept.dst.ip().to_string(), tcp_accept.dst.port());
             _data.extend(target.as_bytes());
-            send.send((tcpmux::cmd::PKG, id, Some(_data))).unwrap();
-            tcpmux::bicopy(id, recv, send, src_stream, vec_pool).await;
+            send.send((cmd::PKG, id, Some(_data))).unwrap();
+            bicopy(id, recv, send, src_stream, vec_pool).await;
         });
     }
 }

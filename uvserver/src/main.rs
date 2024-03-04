@@ -1,7 +1,7 @@
 use std::{fs::File, io::{BufReader, Cursor, Read}, sync::Arc};
 
+use channel_mux_with_stream::{bicopy, cmd, server::{MuxServer, StreamMuxServer}};
 use serde::{Deserialize, Serialize};
-use tcpmux::{cmd, server::MuxServer};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::{rustls, TlsAcceptor};
 
@@ -86,7 +86,7 @@ async fn main() {
                             return;
                         }
                     };
-                    let (mut mux_server, _) = tcpmux::server::StreamMuxServer::init(ctrl_conn);
+                    let (mut mux_server, _) = StreamMuxServer::init(ctrl_conn);
                     loop {
                         let (id, mut recv, send, vec_pool) = if let Some(_t) = mux_server.accept_channel().await {
                             _t
@@ -109,7 +109,7 @@ async fn main() {
                             match TcpStream::connect(&dst).await {
                                 Ok(stream) => {
                                     log::info!("{} open dst success {}", line!(), dst);
-                                    tcpmux::bicopy(id, recv, send, stream, vec_pool.clone()).await;
+                                    bicopy(id, recv, send, stream, vec_pool.clone()).await;
                                 }
                                 Err(e) => {
                                     log::error!("{} -> {} open dst error {}", line!(), dst, e);
