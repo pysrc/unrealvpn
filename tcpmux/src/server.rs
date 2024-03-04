@@ -1,16 +1,16 @@
 use std::{collections::HashMap, marker::PhantomData};
 
-use tokio::{io::{AsyncReadExt, AsyncWriteExt}, select, sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender}};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, select, sync::{mpsc, oneshot}};
 
 
 use crate::{pool::VecPool, cmd};
 
-type UReceiver = UnboundedReceiver<Vec<u8>>;
-type MainSender = UnboundedSender<(u8, u64, Option<Vec<u8>>)>;
+type UReceiver = mpsc::UnboundedReceiver<Vec<u8>>;
+type MainSender = mpsc::UnboundedSender<(u8, u64, Option<Vec<u8>>)>;
 
 pub trait MuxServer<IO> {
     // 初始化
-    fn init(stream: IO) -> Self;
+    fn init(stream: IO) -> (Self, oneshot::Receiver<()>) where Self: Sized;
     // 接收新通道
     fn accept_channel(&mut self) -> impl std::future::Future<Output = Option<(u64, UReceiver, MainSender, VecPool)>> + Send;
 }
@@ -18,19 +18,21 @@ pub trait MuxServer<IO> {
 pub struct StreamMuxServer<IO> {
     phantom: PhantomData<IO>,
     vec_pool: VecPool,
-    receiver: UnboundedReceiver<(u64, UReceiver, MainSender)>,
+    receiver: mpsc::UnboundedReceiver<(u64, UReceiver, MainSender)>,
 }
 
 impl<IO> MuxServer<IO> for StreamMuxServer<IO>
     where IO: AsyncReadExt + AsyncWriteExt + Unpin + Send + 'static
 {
-    fn init(mut stream: IO) -> Self {
-        let (sender, receiver) = unbounded_channel();
+    fn init(mut stream: IO) -> (Self, oneshot::Receiver<()>) where Self: Sized {
+        let (sender, receiver) = mpsc::unbounded_channel();
+        // 断线通道
+        let (stop_send, stop_recv) = oneshot::channel::<()>();
         let vec_pool = VecPool::new();
         let mut use_pool = vec_pool.clone();
         // 接收发送到主连接的数据
-        let (main_sender, mut main_receiver) = unbounded_channel::<(u8, u64, Option<Vec<u8>>)>();
-        tokio::spawn(async move {
+        let (main_sender, mut main_receiver) = mpsc::unbounded_channel::<(u8, u64, Option<Vec<u8>>)>();
+        let rt = tokio::spawn(async move {
             let mut work_sender_map = HashMap::new();
             let mut main_recv_data = use_pool.get().await;
             loop {
@@ -60,7 +62,7 @@ impl<IO> MuxServer<IO> for StreamMuxServer<IO>
                                     // 开启新通道
                                     cmd::NEWBI => {
                                         // 接收发送到工作通道的数据
-                                        let (work_sender, work_receiver) = unbounded_channel::<Vec<u8>>();
+                                        let (work_sender, work_receiver) = mpsc::unbounded_channel::<Vec<u8>>();
                                         sender.send((main_recv_id, work_receiver, main_sender.clone())).unwrap();
                                         work_sender_map.insert(main_recv_id, work_sender);
                                         log::info!("{} new channel {}", line!(), main_recv_id);
@@ -147,11 +149,15 @@ impl<IO> MuxServer<IO> for StreamMuxServer<IO>
                 }
             }
         });
-        Self {
+        tokio::spawn(async move {
+            _ = rt.await;
+            stop_send.send(()).unwrap();
+        });
+        (Self {
             phantom: PhantomData,
             vec_pool,
             receiver,
-        }
+        }, stop_recv)
     }
     
     async fn accept_channel(&mut self) -> Option<(u64, UReceiver, MainSender, VecPool)> {

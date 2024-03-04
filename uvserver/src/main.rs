@@ -86,7 +86,7 @@ async fn main() {
                             return;
                         }
                     };
-                    let mut mux_server = tcpmux::server::StreamMuxServer::init(ctrl_conn);
+                    let (mut mux_server, _) = tcpmux::server::StreamMuxServer::init(ctrl_conn);
                     loop {
                         let (id, mut recv, send, vec_pool) = if let Some(_t) = mux_server.accept_channel().await {
                             _t
