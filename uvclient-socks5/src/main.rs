@@ -7,13 +7,10 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::time::timeout;
 use tokio_rustls::{rustls, webpki, TlsConnector};
 use std::collections::HashSet;
-use std::env;
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufReader, Cursor, Read, Write};
 use std::net::SocketAddr;
-use std::process::{Command, Stdio};
-use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 
 async fn handle_client(
@@ -237,19 +234,6 @@ pub fn tls_cert(cert: &[u8], name: &str) -> (TlsConnector, rustls::ServerName) {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     simple_logger::init_with_level(log::Level::Info).unwrap();
-    let args: Vec<String> = env::args().collect();
-    if !args.contains(&String::from_str("--work").unwrap()) {
-        // 这里起实际工作的子进程，只要子进程退出就直接重启一个
-        loop {
-            println!("start work");
-            Command::new(&args[0])
-            .arg("--work")
-            .stdout(Stdio::inherit())
-            .output()
-            .unwrap();
-            std::thread::sleep(std::time::Duration::from_secs(1));
-        }
-    }
     let domain_cache_cfg = "domain_cache.yml";
     let cfg = Config::from_file("s5client-config.yml");
     let mut cert = Vec::<u8>::new();
@@ -266,7 +250,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let listener = TcpListener::bind(&cfg.bind).await?;
     log::info!("bind on: {}", cfg.bind);
 
-    let (mut mux_client, stop_recv) = StreamMuxClient::init(ctrl_conn);
+    let (mut mux_client, _) = StreamMuxClient::init(ctrl_conn);
 
     // 加载缓存
     let _domain_cache = match std::fs::read_to_string(domain_cache_cfg) {
@@ -329,19 +313,15 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
         });
     }
-    tokio::spawn(async move {
-        loop {
-            let (stream, _) = listener.accept().await.unwrap();
-            let _domain_cachec = _domain_cache.clone();
-            let full = cfg.full;
-            let (id, recv, send, vec_pool) = mux_client.new_channel().await;
-            tokio::spawn(async move {
-                if let Err(e) = handle_client(stream, id, recv, send, vec_pool, _domain_cachec, full).await {
-                    log::error!("{}->{}", line!(), e);
-                }
-            });
-        }
-    });
-    _ = stop_recv.await;
-    Ok(())
+    loop {
+        let (stream, _) = listener.accept().await.unwrap();
+        let _domain_cachec = _domain_cache.clone();
+        let full = cfg.full;
+        let (id, recv, send, vec_pool) = mux_client.new_channel().await;
+        tokio::spawn(async move {
+            if let Err(e) = handle_client(stream, id, recv, send, vec_pool, _domain_cachec, full).await {
+                log::error!("{}->{}", line!(), e);
+            }
+        });
+    }
 }
