@@ -19,7 +19,7 @@ rustls-pemfile = "1.0.2"
 
 tun2layer4 = { git = "https://github.com/pysrc/tun2layer4.git" }
 
-channel-mux-with-stream = { git = "https://github.com/pysrc/channel-mux-with-stream.git" , version = "0.1.4" }
+channel-mux-with-stream = { git = "https://github.com/pysrc/channel-mux-with-stream.git", branch = "0.1.5" }
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"
