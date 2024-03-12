@@ -113,7 +113,7 @@ async fn main() {
                                 }
                                 Err(e) => {
                                     log::error!("{} -> {} open dst error {}", line!(), dst, e);
-                                    send.send((cmd::BREAK, id, None)).unwrap();
+                                    send.send((cmd::BREAK, id, None)).await.unwrap();
                                 }
                             }
                             

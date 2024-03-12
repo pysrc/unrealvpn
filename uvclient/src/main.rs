@@ -97,7 +97,7 @@ async fn main() {
             let mut _data = vec_pool.get().await;
             let target = format!("{}:{}", tcp_accept.dst.ip().to_string(), tcp_accept.dst.port());
             _data.extend(target.as_bytes());
-            send.send((cmd::PKG, id, Some(_data))).unwrap();
+            send.send((cmd::PKG, id, Some(_data))).await.unwrap();
             bicopy(id, recv, send, src_stream, vec_pool).await;
         });
     }

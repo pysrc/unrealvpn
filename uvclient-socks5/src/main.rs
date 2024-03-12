@@ -3,7 +3,7 @@ use channel_mux_with_stream::{bicopy, cmd, pool};
 use serde::{Deserialize, Serialize};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::mpsc::{Receiver, Sender};
 use tokio::time::timeout;
 use tokio_rustls::{rustls, webpki, TlsConnector};
 use std::collections::HashSet;
@@ -16,8 +16,8 @@ use std::sync::{Arc, RwLock};
 async fn handle_client(
     mut stream: TcpStream, 
     id: u64,
-    recv: UnboundedReceiver<Vec<u8>>,
-    send: UnboundedSender<(u8, u64, Option<Vec<u8>>)>,
+    recv: Receiver<Vec<u8>>,
+    send: Sender<(u8, u64, Option<Vec<u8>>)>,
     mut vec_pool: pool::VecPool,
     _domain_cachec: Arc<RwLock<HashSetWrapper>>,
     full: bool,
@@ -81,7 +81,7 @@ async fn handle_client(
         let mut _data = vec_pool.get().await;
         let target = format!("{}:{}", address, port);
         _data.extend(target.as_bytes());
-        send.send((cmd::PKG, id, Some(_data))).unwrap();
+        send.send((cmd::PKG, id, Some(_data))).await.unwrap();
         bicopy(id, recv, send, stream, vec_pool).await;
         return Ok(());
     }
@@ -121,7 +121,7 @@ async fn handle_client(
         let mut _data = vec_pool.get().await;
         let target = format!("{}:{}", address, port);
         _data.extend(target.as_bytes());
-        send.send((cmd::PKG, id, Some(_data))).unwrap();
+        send.send((cmd::PKG, id, Some(_data))).await.unwrap();
         bicopy(id, recv, send, stream, vec_pool).await;
         return Ok(());
     }
@@ -166,7 +166,7 @@ async fn handle_client(
             let mut _data = vec_pool.get().await;
             let target = format!("{}:{}", address, port);
             _data.extend(target.as_bytes());
-            send.send((cmd::PKG, id, Some(_data))).unwrap();
+            send.send((cmd::PKG, id, Some(_data))).await.unwrap();
             bicopy(id, recv, send, stream, vec_pool).await;
             return Ok(());
         }
