@@ -1,24 +1,21 @@
-use channel_mux_with_stream::client::{MuxClient, StreamMuxClient};
-use channel_mux_with_stream::{bicopy, cmd, pool};
+use async_smux::MuxConnector;
 use serde::{Deserialize, Serialize};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::sync::mpsc::{Sender, UnboundedReceiver};
 use tokio::time::timeout;
+use tokio_rustls::client::TlsStream;
 use tokio_rustls::{rustls, webpki, TlsConnector};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufReader, Cursor, Read, Write};
 use std::net::SocketAddr;
+use std::num::NonZeroU64;
 use std::sync::{Arc, RwLock};
 
 async fn handle_client(
     mut stream: TcpStream, 
-    id: u64,
-    recv: UnboundedReceiver<Vec<u8>>,
-    send: Sender<(u8, u64, Option<Vec<u8>>)>,
-    mut vec_pool: pool::VecPool,
+    mux_connector: MuxConnector<TlsStream<TcpStream>>,
     _domain_cachec: Arc<RwLock<HashSetWrapper>>,
     full: bool,
 ) -> Result<(), Box<dyn Error>> {
@@ -78,11 +75,13 @@ async fn handle_client(
     
     if full {
         // 直接交给上游服务端解析
-        let mut _data = vec_pool.get().await;
         let target = format!("{}:{}", address, port);
-        _data.extend(target.as_bytes());
-        send.send((cmd::PKG, id, Some(_data))).await.unwrap();
-        bicopy(id, recv, send, stream, vec_pool).await;
+        let mut _mux_stream = mux_connector.connect().unwrap();
+        _mux_stream.write_u16(target.len() as u16).await.unwrap();
+        _mux_stream.write_all(target.as_bytes()).await.unwrap();
+        _mux_stream.flush().await.unwrap();
+        _ = tokio::io::copy_bidirectional(&mut _mux_stream, &mut stream).await;
+        _ = _mux_stream.shutdown().await;
         return Ok(());
     }
     // 检查domain是远程还是本地解析
@@ -118,11 +117,13 @@ async fn handle_client(
     }
     if _domain_parse.1 {
         // 直接交给上游服务端解析
-        let mut _data = vec_pool.get().await;
         let target = format!("{}:{}", address, port);
-        _data.extend(target.as_bytes());
-        send.send((cmd::PKG, id, Some(_data))).await.unwrap();
-        bicopy(id, recv, send, stream, vec_pool).await;
+        let mut _mux_stream = mux_connector.connect().unwrap();
+        _mux_stream.write_u16(target.len() as u16).await.unwrap();
+        _mux_stream.write_all(target.as_bytes()).await.unwrap();
+        _mux_stream.flush().await.unwrap();
+        _ = tokio::io::copy_bidirectional(&mut _mux_stream, &mut stream).await;
+        _ = _mux_stream.shutdown().await;
         return Ok(());
     }
     match timeout(std::time::Duration::from_millis(3000), TcpStream::connect((address.as_str(), port))).await {
@@ -163,11 +164,13 @@ async fn handle_client(
                     return Ok(());
                 }
             }
-            let mut _data = vec_pool.get().await;
             let target = format!("{}:{}", address, port);
-            _data.extend(target.as_bytes());
-            send.send((cmd::PKG, id, Some(_data))).await.unwrap();
-            bicopy(id, recv, send, stream, vec_pool).await;
+            let mut _mux_stream = mux_connector.connect().unwrap();
+            _mux_stream.write_u16(target.len() as u16).await.unwrap();
+            _mux_stream.write_all(target.as_bytes()).await.unwrap();
+            _mux_stream.flush().await.unwrap();
+            _ = tokio::io::copy_bidirectional(&mut _mux_stream, &mut stream).await;
+            _ = _mux_stream.shutdown().await;
             return Ok(());
         }
     };
@@ -250,7 +253,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let listener = TcpListener::bind(&cfg.bind).await?;
     log::info!("bind on: {}", cfg.bind);
 
-    let (mut mux_client, _) = StreamMuxClient::init(ctrl_conn);
+    let (mux_connector, _, mux_worker) = async_smux::MuxBuilder::client().with_keep_alive_interval(NonZeroU64::new(30).unwrap()).with_connection(ctrl_conn).build();
+    tokio::spawn(mux_worker);
 
     // 加载缓存
     let _domain_cache = match std::fs::read_to_string(domain_cache_cfg) {
@@ -317,9 +321,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let (stream, _) = listener.accept().await.unwrap();
         let _domain_cachec = _domain_cache.clone();
         let full = cfg.full;
-        let (id, recv, send, vec_pool) = mux_client.new_channel().await;
+        let mux_connector = mux_connector.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_client(stream, id, recv, send, vec_pool, _domain_cachec, full).await {
+            if let Err(e) = handle_client(stream, mux_connector, _domain_cachec, full).await {
                 log::error!("{}->{}", line!(), e);
             }
         });

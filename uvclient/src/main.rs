@@ -1,8 +1,7 @@
-use std::{fs::File, io::{BufReader, Cursor, Read, Write}, net::Ipv4Addr, sync::Arc};
+use std::{fs::File, io::{BufReader, Cursor, Read, Write}, net::Ipv4Addr, num::NonZeroU64, sync::Arc};
 
-use channel_mux_with_stream::{bicopy, client::{MuxClient, StreamMuxClient}, cmd};
 use serde::{Deserialize, Serialize};
-use tokio::net::TcpStream;
+use tokio::{io::AsyncWriteExt, net::TcpStream};
 use tokio_rustls::{rustls, webpki, TlsConnector};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -84,21 +83,25 @@ async fn main() {
         Some(cfg.routes),
     );
 
-    let (mut mux_client, _) = StreamMuxClient::init(ctrl_conn);
+    let (mux_connector, _, mux_worker) = async_smux::MuxBuilder::client().with_keep_alive_interval(NonZeroU64::new(30).unwrap()).with_connection(ctrl_conn).build();
+    tokio::spawn(mux_worker);
+
 
     // 面向于inside端
     while let Ok(tcp_accept) = tun.accept_tcp() {
         log::info!("dst: {}", tcp_accept.dst);
-        let (id, recv, send, mut vec_pool) = mux_client.new_channel().await;
+        let mux_connector = mux_connector.clone();
         tokio::spawn(async move {
             let conn = tcp_accept.stream.try_clone().unwrap();
             conn.set_nonblocking(true).unwrap();
-            let src_stream = tokio::net::TcpStream::from_std(conn).unwrap();
-            let mut _data = vec_pool.get().await;
+            let mut src_stream = tokio::net::TcpStream::from_std(conn).unwrap();
             let target = format!("{}:{}", tcp_accept.dst.ip().to_string(), tcp_accept.dst.port());
-            _data.extend(target.as_bytes());
-            send.send((cmd::PKG, id, Some(_data))).await.unwrap();
-            bicopy(id, recv, send, src_stream, vec_pool).await;
+            let mut _mux_stream = mux_connector.connect().unwrap();
+            _mux_stream.write_u16(target.len() as u16).await.unwrap();
+            _mux_stream.write_all(target.as_bytes()).await.unwrap();
+            _mux_stream.flush().await.unwrap();
+            _ = tokio::io::copy_bidirectional(&mut _mux_stream, &mut src_stream).await;
+            _ = _mux_stream.shutdown().await;
         });
     }
 }

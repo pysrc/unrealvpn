@@ -1,8 +1,7 @@
-use std::{fs::File, io::{BufReader, Cursor, Read}, sync::Arc};
+use std::{fs::File, io::{BufReader, Cursor, Read}, num::NonZeroU64, sync::Arc};
 
-use channel_mux_with_stream::{bicopy, cmd, server::{MuxServer, StreamMuxServer}};
 use serde::{Deserialize, Serialize};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream}};
 use tokio_rustls::{rustls, TlsAcceptor};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -86,34 +85,25 @@ async fn main() {
                             return;
                         }
                     };
-                    let (mut mux_server, _) = StreamMuxServer::init(ctrl_conn);
+                    let (_, mut mux_acceptor, mux_worker) = async_smux::MuxBuilder::server().with_keep_alive_interval(NonZeroU64::new(30).unwrap()).with_connection(ctrl_conn).build();
+                    tokio::spawn(mux_worker);
                     loop {
-                        let (id, mut recv, send, vec_pool) = if let Some(_t) = mux_server.accept_channel().await {
-                            _t
-                        } else {
-                            log::info!("{} stream close.", line!());
-                            return;
-                        };
+                        let mut _stream = mux_acceptor.accept().await.unwrap();
                         tokio::spawn(async move {
-
-                            let _data = match recv.recv().await {
-                                Some(_d) => _d,
-                                None => {
-                                    log::info!("{} recv close {}", line!(), id);
-                                    return;
-                                }
-                            };
+                            let _len = _stream.read_u16().await.unwrap() as usize;
+                            let mut _dst_data = vec![0u8; _len];
+                            _stream.read_exact(&mut _dst_data).await.unwrap();
                             // 解析地址
-                            let dst = String::from_utf8_lossy(&_data).to_string();
+                            let dst = String::from_utf8_lossy(&_dst_data).to_string();
                             log::info!("{} open dst {}", line!(), dst);
                             match TcpStream::connect(&dst).await {
-                                Ok(stream) => {
+                                Ok(mut stream) => {
                                     log::info!("{} open dst success {}", line!(), dst);
-                                    bicopy(id, recv, send, stream, vec_pool.clone()).await;
+                                    _ = tokio::io::copy_bidirectional(&mut stream, &mut _stream).await;
                                 }
                                 Err(e) => {
                                     log::error!("{} -> {} open dst error {}", line!(), dst, e);
-                                    send.send((cmd::BREAK, id, None)).await.unwrap();
+                                    _ = _stream.shutdown().await;
                                 }
                             }
                             
