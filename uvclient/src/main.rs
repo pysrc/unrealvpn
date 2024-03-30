@@ -1,8 +1,14 @@
-use std::{fs::File, io::{BufReader, Cursor, Read, Write}, net::Ipv4Addr, num::NonZeroU64, sync::Arc};
+use std::{fs::File, io::{BufReader, Cursor, Read, Write}, net::Ipv4Addr, num::NonZeroU64, str::FromStr, sync::Arc};
 
 use serde::{Deserialize, Serialize};
 use tokio::{io::AsyncWriteExt, net::TcpStream};
 use tokio_rustls::{rustls, webpki, TlsConnector};
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct TunConfig {
+    ip: String,
+    name: String,
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Config {
@@ -10,6 +16,7 @@ struct Config {
     #[serde(rename = "ssl-cert")]
     ssl_cert: String,
     routes: Vec<String>,
+    tun: TunConfig,
 }
 
 impl Config {
@@ -75,10 +82,10 @@ async fn main() {
 
     let ctrl_conn = TcpStream::connect(cfg.server).await.unwrap();
     let ctrl_conn = connector.connect(domain.clone(), ctrl_conn).await.unwrap();
-    
+    let tun_ip = Ipv4Addr::from_str(&cfg.tun.ip).expect("error tun ip");
     let tun = tun2layer4::os_tun::new(
-        String::from("unrealvpn"),
-        Ipv4Addr::new(10, 28, 13, 0),
+        cfg.tun.name,
+        tun_ip,
         24,
         Some(cfg.routes),
     );

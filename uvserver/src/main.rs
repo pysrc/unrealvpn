@@ -88,7 +88,13 @@ async fn main() {
                     let (_, mut mux_acceptor, mux_worker) = async_smux::MuxBuilder::server().with_keep_alive_interval(NonZeroU64::new(30).unwrap()).with_connection(ctrl_conn).build();
                     tokio::spawn(mux_worker);
                     loop {
-                        let mut _stream = mux_acceptor.accept().await.unwrap();
+                        let mut _stream = match mux_acceptor.accept().await {
+                            Some(_cc) => _cc,
+                            None => {
+                                log::info!("client break {}", _addr);
+                                return;
+                            }
+                        };
                         tokio::spawn(async move {
                             let _len = _stream.read_u16().await.unwrap() as usize;
                             let mut _dst_data = vec![0u8; _len];
