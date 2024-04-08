@@ -1,8 +1,8 @@
-use async_smux::MuxConnector;
+use async_smux::MuxStream;
 use serde::{Deserialize, Serialize};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::time::timeout;
+use tokio::time::{self, timeout};
 use tokio_rustls::client::TlsStream;
 use tokio_rustls::{rustls, webpki, TlsConnector};
 use std::collections::HashSet;
@@ -15,7 +15,7 @@ use std::sync::{Arc, RwLock};
 
 async fn handle_client(
     mut stream: TcpStream, 
-    mux_connector: MuxConnector<TlsStream<TcpStream>>,
+    mut _mux_stream: MuxStream<TlsStream<TcpStream>>,
     _domain_cachec: Arc<RwLock<HashSetWrapper>>,
     full: bool,
 ) -> Result<(), Box<dyn Error>> {
@@ -76,7 +76,6 @@ async fn handle_client(
     if full {
         // 直接交给上游服务端解析
         let target = format!("{}:{}", address, port);
-        let mut _mux_stream = mux_connector.connect().unwrap();
         _mux_stream.write_u16(target.len() as u16).await.unwrap();
         _mux_stream.write_all(target.as_bytes()).await.unwrap();
         _mux_stream.flush().await.unwrap();
@@ -118,7 +117,6 @@ async fn handle_client(
     if _domain_parse.1 {
         // 直接交给上游服务端解析
         let target = format!("{}:{}", address, port);
-        let mut _mux_stream = mux_connector.connect().unwrap();
         _mux_stream.write_u16(target.len() as u16).await.unwrap();
         _mux_stream.write_all(target.as_bytes()).await.unwrap();
         _mux_stream.flush().await.unwrap();
@@ -165,7 +163,6 @@ async fn handle_client(
                 }
             }
             let target = format!("{}:{}", address, port);
-            let mut _mux_stream = mux_connector.connect().unwrap();
             _mux_stream.write_u16(target.len() as u16).await.unwrap();
             _mux_stream.write_all(target.as_bytes()).await.unwrap();
             _mux_stream.flush().await.unwrap();
@@ -247,13 +244,13 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let (connector, domain) = tls_cert(&cert, "unrealvpn");
 
-    let ctrl_conn = TcpStream::connect(cfg.server).await.unwrap();
+    let ctrl_conn = TcpStream::connect(cfg.server.clone()).await.unwrap();
     let ctrl_conn = connector.connect(domain.clone(), ctrl_conn).await.unwrap();
 
     let listener = TcpListener::bind(&cfg.bind).await?;
     log::info!("bind on: {}", cfg.bind);
 
-    let (mux_connector, _, mux_worker) = async_smux::MuxBuilder::client().with_keep_alive_interval(NonZeroU64::new(30).unwrap()).with_connection(ctrl_conn).build();
+    let (mut mux_connector, _, mut mux_worker) = async_smux::MuxBuilder::client().with_keep_alive_interval(NonZeroU64::new(30).unwrap()).with_connection(ctrl_conn).build();
     tokio::spawn(mux_worker);
 
     // 加载缓存
@@ -321,9 +318,41 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let (stream, _) = listener.accept().await.unwrap();
         let _domain_cachec = _domain_cache.clone();
         let full = cfg.full;
-        let mux_connector = mux_connector.clone();
+        let mut _mux_stream = match mux_connector.connect() {
+            Ok(cc) => cc,
+            Err(e) => {
+                log::info!("{}->{}", line!(), e);
+                loop {
+                    time::sleep(time::Duration::from_secs(1)).await;
+                    let connector = connector.clone();
+                    let ctrl_conn = match TcpStream::connect(cfg.server.clone()).await {
+                        Ok(cc) => cc,
+                        Err(e) => {
+                            log::info!("{}->{}", line!(), e);
+                            continue;
+                        }
+                    };
+                    let ctrl_conn = match connector.connect(domain.clone(), ctrl_conn).await {
+                        Ok(cc) => cc,
+                        Err(e) => {
+                            log::info!("{}->{}", line!(), e);
+                            continue;
+                        }
+                    };
+                    (mux_connector, _, mux_worker) = async_smux::MuxBuilder::client().with_keep_alive_interval(NonZeroU64::new(30).unwrap()).with_connection(ctrl_conn).build();
+                    tokio::spawn(mux_worker);
+                    match mux_connector.connect() {
+                        Ok(cc) => break cc,
+                        Err(e) => {
+                            log::info!("{}->{}", line!(), e);
+                            continue;
+                        }
+                    };
+                }
+            }
+        };
         tokio::spawn(async move {
-            if let Err(e) = handle_client(stream, mux_connector, _domain_cachec, full).await {
+            if let Err(e) = handle_client(stream, _mux_stream, _domain_cachec, full).await {
                 log::error!("{}->{}", line!(), e);
             }
         });

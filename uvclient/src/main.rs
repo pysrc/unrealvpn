@@ -1,7 +1,7 @@
 use std::{fs::File, io::{BufReader, Cursor, Read, Write}, net::Ipv4Addr, num::NonZeroU64, str::FromStr, sync::Arc};
 
 use serde::{Deserialize, Serialize};
-use tokio::{io::AsyncWriteExt, net::TcpStream};
+use tokio::{io::AsyncWriteExt, net::TcpStream, time};
 use tokio_rustls::{rustls, webpki, TlsConnector};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -80,7 +80,7 @@ async fn main() {
 
     let (connector, domain) = tls_cert(&cert, "unrealvpn");
 
-    let ctrl_conn = TcpStream::connect(cfg.server).await.unwrap();
+    let ctrl_conn = TcpStream::connect(cfg.server.clone()).await.unwrap();
     let ctrl_conn = connector.connect(domain.clone(), ctrl_conn).await.unwrap();
     let tun_ip = Ipv4Addr::from_str(&cfg.tun.ip).expect("error tun ip");
     let tun = tun2layer4::os_tun::new(
@@ -90,20 +90,52 @@ async fn main() {
         Some(cfg.routes),
     );
 
-    let (mux_connector, _, mux_worker) = async_smux::MuxBuilder::client().with_keep_alive_interval(NonZeroU64::new(30).unwrap()).with_connection(ctrl_conn).build();
+    let (mut mux_connector, _, mut mux_worker) = async_smux::MuxBuilder::client().with_keep_alive_interval(NonZeroU64::new(30).unwrap()).with_connection(ctrl_conn).build();
     tokio::spawn(mux_worker);
 
 
     // 面向于inside端
     while let Ok(tcp_accept) = tun.accept_tcp() {
         log::info!("dst: {}", tcp_accept.dst);
-        let mux_connector = mux_connector.clone();
+        let mut _mux_stream = match mux_connector.connect() {
+            Ok(cc) => cc,
+            Err(e) => {
+                log::info!("{}->{}", line!(), e);
+                loop {
+                    time::sleep(time::Duration::from_secs(1)).await;
+                    let connector = connector.clone();
+                    let ctrl_conn = match TcpStream::connect(cfg.server.clone()).await {
+                        Ok(cc) => cc,
+                        Err(e) => {
+                            log::info!("{}->{}", line!(), e);
+                            continue;
+                        }
+                    };
+                    let ctrl_conn = match connector.connect(domain.clone(), ctrl_conn).await {
+                        Ok(cc) => cc,
+                        Err(e) => {
+                            log::info!("{}->{}", line!(), e);
+                            continue;
+                        }
+                    };
+                    (mux_connector, _, mux_worker) = async_smux::MuxBuilder::client().with_keep_alive_interval(NonZeroU64::new(30).unwrap()).with_connection(ctrl_conn).build();
+                    tokio::spawn(mux_worker);
+                    match mux_connector.connect() {
+                        Ok(cc) => break cc,
+                        Err(e) => {
+                            log::info!("{}->{}", line!(), e);
+                            continue;
+                        }
+                    };
+                }
+            }
+        };
+        
         tokio::spawn(async move {
             let conn = tcp_accept.stream.try_clone().unwrap();
             conn.set_nonblocking(true).unwrap();
             let mut src_stream = tokio::net::TcpStream::from_std(conn).unwrap();
             let target = format!("{}:{}", tcp_accept.dst.ip().to_string(), tcp_accept.dst.port());
-            let mut _mux_stream = mux_connector.connect().unwrap();
             _mux_stream.write_u16(target.len() as u16).await.unwrap();
             _mux_stream.write_all(target.as_bytes()).await.unwrap();
             _mux_stream.flush().await.unwrap();
