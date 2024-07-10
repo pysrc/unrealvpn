@@ -62,12 +62,7 @@ impl VecPool {
         match v {
             Some(mut d) => {
                 log::info!("replace vec {}", t.len());
-                if size > d.capacity() {
-                    d.reserve(size - d.capacity());
-                }
-                unsafe {
-                    d.set_len(size);
-                }
+                d.resize(size, 0);
                 return d;
             }
             None => {
