@@ -19,6 +19,8 @@ rustls-pemfile = "1.0.2"
 
 tun2layer4 = { git = "https://github.com/pysrc/tun2layer4.git" }
 
+# tun2layer4 = {path = "../../tun2layer4"}
+
 async_smux = "0.3"
 
 [target.'cfg(windows)'.build-dependencies]
