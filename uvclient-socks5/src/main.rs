@@ -231,6 +231,8 @@ pub fn tls_cert(cert: &[u8], name: &str) -> (TlsConnector, rustls::ServerName) {
     (connector, server_name)
 }
 
+const CMD_TCP: u8= 2;
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
     simple_logger::init_with_level(log::Level::Info).unwrap();
@@ -245,7 +247,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let (connector, domain) = tls_cert(&cert, "unrealvpn");
 
     let ctrl_conn = TcpStream::connect(cfg.server.clone()).await.unwrap();
-    let ctrl_conn = connector.connect(domain.clone(), ctrl_conn).await.unwrap();
+    let mut ctrl_conn = connector.connect(domain.clone(), ctrl_conn).await.unwrap();
+    ctrl_conn.write_u8(CMD_TCP).await.unwrap();
 
     let listener = TcpListener::bind(&cfg.bind).await?;
     log::info!("bind on: {}", cfg.bind);
