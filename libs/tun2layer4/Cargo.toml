@@ -13,7 +13,7 @@ log = "0.4"
 
 
 [target.'cfg(target_os = "windows")'.dependencies]
-wintun = "0.2.1"
+wintun = "0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tun = "0.5"
