@@ -17,9 +17,7 @@ tokio = { version = "1.25.0", features = ["full"] }
 tokio-rustls = { version = "0.23.4" }
 rustls-pemfile = "1.0.2"
 
-tun2layer4 = { git = "https://github.com/pysrc/tun2layer4.git" }
-
-# tun2layer4 = {path = "../../tun2layer4"}
+tun2layer4 = {path = "../libs/tun2layer4"}
 
 async_smux = "0.3"
 
