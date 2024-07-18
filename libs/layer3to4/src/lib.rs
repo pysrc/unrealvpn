@@ -1,12 +1,125 @@
-/// 次源码仅仅提供ip包转换为TCP/UDP的实现方式
+/// 此源码仅仅提供ip包转换为TCP/UDP的实现方式
 
-use packet::{ip::Protocol, tcp::Flags, Packet, PacketMut};
 use std::{
     collections::HashMap,
     io::{self, Error, ErrorKind},
     net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream, UdpSocket},
     sync::{mpsc::channel, Arc, RwLock},
 };
+
+pub mod ip {
+    use std::net::Ipv4Addr;
+
+    use crate::checksum;
+
+    pub enum Version {
+        V4, V6, Others
+    }
+    pub enum Protocol {
+        Udp, Tcp, Others
+    }
+    // 版本
+    pub fn version(buf: &[u8]) -> Version {
+        match buf[0] >> 4 {
+            4 => Version::V4,
+            6 => Version::V6,
+            _ => Version::Others,
+        }
+    }
+    pub fn protocol(buf: &[u8]) -> Protocol {
+        match buf[9] {
+            6 => Protocol::Tcp,
+            17 => Protocol::Udp,
+            _ => Protocol::Others,
+        }
+    }
+    pub fn source4(buf: &[u8]) -> Ipv4Addr {
+		Ipv4Addr::new(
+			buf[12],
+			buf[13],
+			buf[14],
+			buf[15])
+	}
+    pub fn copy_source4(buf: &[u8], dst: &mut [u8]) {
+        dst[0..4].copy_from_slice(&buf[12..16]);
+	}
+    pub fn destination4(buf: &[u8]) -> Ipv4Addr {
+		Ipv4Addr::new(
+			buf[16],
+			buf[17],
+			buf[18],
+			buf[19])
+	}
+    pub fn copy_destination4(buf: &[u8], dst: &mut [u8]) {
+        dst[0..4].copy_from_slice(&buf[16..20]);
+	}
+    pub fn header(buf: &[u8]) -> u8 {
+		buf[0] & 0b1111
+	}
+    pub fn payload(buf: &[u8]) -> &[u8] {
+		let header_size = header(&buf) as usize * 4;
+        &buf[header_size..]
+	}
+    pub fn payload_mut(buf: &mut [u8]) -> &mut [u8] {
+		let header_size = header(&buf) as usize * 4;
+        &mut buf[header_size..]
+	}
+    pub fn set_source4(buf: &mut [u8], value: Ipv4Addr) {
+		buf[12 .. 16].copy_from_slice(&value.octets());
+	}
+    pub fn set_destination4(buf: &mut [u8], value: Ipv4Addr) {
+		buf[16 .. 20].copy_from_slice(&value.octets());
+	}
+    pub fn get_checksum(buf: &[u8]) -> u16 {
+        u16::from_be_bytes([buf[10], buf[11]])
+	}
+    pub fn set_checksum(buf: &mut [u8], value: u16) {
+        buf[10..12].copy_from_slice(&value.to_be_bytes());
+	}
+    pub fn update_checksum(buf: &mut [u8]) {
+        let siz = header(&buf) as usize * 4;
+        set_checksum(buf, 0);
+        let value = checksum(0, &buf[..siz]);
+        set_checksum(buf, (!value) as u16);
+	}
+
+}
+
+pub mod udp {
+    pub fn source(buf: &[u8]) -> u16 {
+		u16::from_be_bytes([buf[0], buf[1]])
+	}
+    pub fn destination(buf: &[u8]) -> u16 {
+		u16::from_be_bytes([buf[2], buf[3]])
+	}
+    pub fn set_source(buf: &mut [u8], value: u16) {
+        buf[..2].copy_from_slice(&value.to_be_bytes());
+	}
+    pub fn set_destination(buf: &mut [u8], value: u16) {
+        buf[2..4].copy_from_slice(&value.to_be_bytes());
+	}
+    pub fn set_checksum(buf: &mut [u8], value: u16) {
+		buf[6..8].copy_from_slice(&value.to_be_bytes());
+	}    
+}
+
+pub mod tcp {
+    pub fn source(buf: &[u8]) -> u16 {
+		u16::from_be_bytes([buf[0], buf[1]])
+	}
+    pub fn destination(buf: &[u8]) -> u16 {
+		u16::from_be_bytes([buf[2], buf[3]])
+	}
+    pub fn set_source(buf: &mut [u8], value: u16) {
+        buf[..2].copy_from_slice(&value.to_be_bytes());
+	}
+    pub fn set_destination(buf: &mut [u8], value: u16) {
+        buf[2..4].copy_from_slice(&value.to_be_bytes());
+	}
+    pub fn set_checksum(buf: &mut [u8], value: u16) {
+		buf[16..18].copy_from_slice(&value.to_be_bytes());
+	}    
+}
 
 pub trait Layer3Device: Send + 'static {
     // 设备ip
@@ -22,20 +135,19 @@ pub trait Layer3Device: Send + 'static {
         udp_unreal_context: Arc<RwLock<UnrealContext>>,
     ) -> bool {
         let ip = self.ip();
-        match packet::ip::Packet::new(&mut buffer[..]) {
-            Ok(packet::ip::Packet::V4(mut ipck)) => {
-                // ipv4
-                match ipck.protocol() {
-                    packet::ip::Protocol::Udp => {
-                        let src_addr = ipck.source();
-                        let dst_addr = ipck.destination();
+        match ip::version(&buffer) {
+            ip::Version::V4 => {
+                match ip::protocol(&buffer) {
+                    ip::Protocol::Udp => {
+                        let src_addr = ip::source4(&buffer);
+                        let dst_addr = ip::destination4(&buffer);
                         // 拒绝组播、多播udp，仅支持单播
                         if (dst_addr.octets()[0] >= 224 && dst_addr.octets()[0] <= 239) || dst_addr.octets()[3] == 255 {
                             return false;
                         }
-                        let mut udpck = packet::udp::Packet::new(ipck.payload_mut()).unwrap();
-                        let src_port = udpck.source();
-                        let dst_port = udpck.destination();
+                        let payload = ip::payload(&buffer);
+                        let src_port = udp::source(&payload);
+                        let dst_port = udp::destination(&payload);
                         if dst_addr == unreal_kernel_dst && src_addr == ip {
                             // 发送回内部的包
                             let _real_peer = match udp_unreal_context.read() {
@@ -50,34 +162,33 @@ pub trait Layer3Device: Send + 'static {
                                 let src_port = src.port();
                                 let dst_addr = dst.ip();
                                 let dst_port = dst.port();
-                                udpck
-                                    .set_destination(src_port)
-                                    .unwrap()
-                                    .set_source(dst_port)
-                                    .unwrap()
-                                    .set_checksum(0)
-                                    .unwrap();
-                                let udplen = udpck.as_ref().len() as u16;
-                                let ipck = ipck
-                                    .set_destination(*src_addr)
-                                    .unwrap()
-                                    .set_source(*dst_addr)
-                                    .unwrap()
-                                    .set_checksum(0)
-                                    .unwrap();
-                                ipck.update_checksum().unwrap();
+                                {
+                                    let buffer_mut = buffer.as_mut();
+                                    let mut payload_mut = ip::payload_mut(buffer_mut);
+                                    udp::set_destination(&mut payload_mut, src_port);
+                                    udp::set_source(&mut payload_mut, dst_port);
+                                    udp::set_checksum(&mut payload_mut, 0);
+                                }
+                                {
+                                    let mut buffer_mut = buffer.as_mut();
+                                    ip::set_source4(&mut buffer_mut, *dst_addr);
+                                    ip::set_destination4(&mut buffer_mut, *src_addr);
+                                    ip::update_checksum(&mut buffer_mut);
+                                }
                                 let mut prefix = [0u8; 12];
-                                prefix[0..4].copy_from_slice(&ipck.source().octets());
-                                prefix[4..8].copy_from_slice(&ipck.destination().octets());
-                                prefix[9] = Protocol::Udp.into();
-                                prefix[10] = (udplen >> 8) as u8;
-                                prefix[11] = udplen as u8;
+                                ip::copy_source4(&buffer, &mut prefix[0..4]);
+                                ip::copy_destination4(&buffer, &mut prefix[4..8]);
+                                prefix[9] = 17;
+                                let payload = ip::payload(&buffer);
+                                let payloadlen = payload.len();
+                                prefix[10] = (payloadlen >> 8) as u8;
+                                prefix[11] = payloadlen as u8;
                                 let mut result = checksum(0, &prefix);
-                                result = checksum(result, ipck.payload());
-                                let udp_checksum = (!result) as u16;
-                                let mut udpck =
-                                    packet::udp::Packet::new(ipck.payload_mut()).unwrap();
-                                udpck.set_checksum(udp_checksum).unwrap();
+                                result = checksum(result, payload);
+                                let payload_checksum = (!result) as u16;
+                                let buffer_mut = buffer.as_mut();
+                                let payload_mut = ip::payload_mut(buffer_mut);
+                                udp::set_checksum(payload_mut, payload_checksum);
                                 return true;
                             }
                         } else {
@@ -103,51 +214,47 @@ pub trait Layer3Device: Send + 'static {
                             match unreal_src_port {
                                 Some(unreal_src_port) => {
                                     // 插入到虚拟
-                                    udpck
-                                        .set_destination(udp_kernel_src_port)
-                                        .unwrap()
-                                        .set_source(unreal_src_port)
-                                        .unwrap()
-                                        .set_checksum(0)
-                                        .unwrap();
-                                    let udplen = udpck.as_ref().len() as u16;
-
-                                    let ipck = ipck
-                                        .set_destination(ip)
-                                        .unwrap()
-                                        .set_checksum(0)
-                                        .unwrap()
-                                        .set_source(unreal_kernel_dst)
-                                        .unwrap();
-
-                                    ipck.update_checksum().unwrap();
+                                    {
+                                        let buffer_mut = buffer.as_mut();
+                                        let mut payload_mut = ip::payload_mut(buffer_mut);
+                                        udp::set_destination(&mut payload_mut, udp_kernel_src_port);
+                                        udp::set_source(&mut payload_mut, unreal_src_port);
+                                        udp::set_checksum(&mut payload_mut, 0);
+                                    }
+                                    {
+                                        let mut buffer_mut = buffer.as_mut();
+                                        ip::set_source4(&mut buffer_mut, unreal_kernel_dst);
+                                        ip::set_destination4(&mut buffer_mut, ip);
+                                        ip::update_checksum(&mut buffer_mut);
+                                    }
                                     let mut prefix = [0u8; 12];
-                                    prefix[0..4].copy_from_slice(&ipck.source().octets());
-                                    prefix[4..8].copy_from_slice(&ipck.destination().octets());
-                                    prefix[9] = Protocol::Udp.into();
-                                    prefix[10] = (udplen >> 8) as u8;
-                                    prefix[11] = udplen as u8;
+                                    ip::copy_source4(&buffer, &mut prefix[0..4]);
+                                    ip::copy_destination4(&buffer, &mut prefix[4..8]);
+                                    prefix[9] = 17;
+                                    let payload = ip::payload(&buffer);
+                                    let payloadlen = payload.len();
+                                    prefix[10] = (payloadlen >> 8) as u8;
+                                    prefix[11] = payloadlen as u8;
                                     let mut result = checksum(0, &prefix);
-                                    result = checksum(result, ipck.payload());
-                                    let udp_checksum = (!result) as u16;
-                                    let mut udpck =
-                                        packet::udp::Packet::new(ipck.payload_mut()).unwrap();
-                                    udpck.set_checksum(udp_checksum).unwrap();
+                                    result = checksum(result, payload);
+                                    let payload_checksum = (!result) as u16;
+                                    let buffer_mut = buffer.as_mut();
+                                    let payload_mut = ip::payload_mut(buffer_mut);
+                                    udp::set_checksum(payload_mut, payload_checksum);
                                     return true;
                                 }
                                 None => {}
                             }
                         }
                     }
-                    packet::ip::Protocol::Tcp => {
-                        let src_addr = ipck.source();
-                        let dst_addr = ipck.destination();
-                        let mut tcpck = packet::tcp::Packet::new(ipck.payload_mut()).unwrap();
-                        let src_port = tcpck.source();
-                        let dst_port = tcpck.destination();
-                        // 凡是发给虚拟目标地址的都是协议栈返回的
+                    ip::Protocol::Tcp => {
+                        let src_addr = ip::source4(&buffer);
+                        let dst_addr = ip::destination4(&buffer);
+                        let payload = ip::payload(&buffer);
+                        let src_port: u16 = tcp::source(&payload);
+                        let dst_port = tcp::destination(&payload);
                         if dst_addr == unreal_kernel_dst && src_addr == ip {
-                            // 协议栈返回
+                            // 发送回内部的包
                             let _real_peer = match tcp_unreal_context.read() {
                                 Ok(m) => match m.unreal2real.get(&dst_port) {
                                     Some(_sock_peer) => Some(*_sock_peer),
@@ -160,106 +267,96 @@ pub trait Layer3Device: Send + 'static {
                                 let src_port = src.port();
                                 let dst_addr = dst.ip();
                                 let dst_port = dst.port();
-                                tcpck
-                                    .set_destination(src_port)
-                                    .unwrap()
-                                    .set_source(dst_port)
-                                    .unwrap()
-                                    .set_checksum(0)
-                                    .unwrap();
-                                let tcplen = tcpck.as_ref().len() as u16;
-                                let ipck = ipck
-                                    .set_destination(*src_addr)
-                                    .unwrap()
-                                    .set_source(*dst_addr)
-                                    .unwrap()
-                                    .set_checksum(0)
-                                    .unwrap();
-                                ipck.update_checksum().unwrap();
+                                {
+                                    let buffer_mut = buffer.as_mut();
+                                    let mut payload_mut = ip::payload_mut(buffer_mut);
+                                    tcp::set_destination(&mut payload_mut, src_port);
+                                    tcp::set_source(&mut payload_mut, dst_port);
+                                    tcp::set_checksum(&mut payload_mut, 0);
+                                }
+                                {
+                                    let mut buffer_mut = buffer.as_mut();
+                                    ip::set_source4(&mut buffer_mut, *dst_addr);
+                                    ip::set_destination4(&mut buffer_mut, *src_addr);
+                                    ip::update_checksum(&mut buffer_mut);
+                                }
                                 let mut prefix = [0u8; 12];
-                                prefix[0..4].copy_from_slice(&ipck.source().octets());
-                                prefix[4..8].copy_from_slice(&ipck.destination().octets());
-                                prefix[9] = Protocol::Tcp.into();
-                                prefix[10] = (tcplen >> 8) as u8;
-                                prefix[11] = tcplen as u8;
+                                ip::copy_source4(&buffer, &mut prefix[0..4]);
+                                ip::copy_destination4(&buffer, &mut prefix[4..8]);
+                                prefix[9] = 6;
+                                let payload = ip::payload(&buffer);
+                                let payloadlen = payload.len();
+                                prefix[10] = (payloadlen >> 8) as u8;
+                                prefix[11] = payloadlen as u8;
                                 let mut result = checksum(0, &prefix);
-                                result = checksum(result, ipck.payload());
-                                let tcp_checksum = (!result) as u16;
-                                let mut tcpck =
-                                    packet::tcp::Packet::new(ipck.payload_mut()).unwrap();
-                                tcpck.set_checksum(tcp_checksum).unwrap();
+                                result = checksum(result, payload);
+                                let payload_checksum = (!result) as u16;
+                                let buffer_mut = buffer.as_mut();
+                                let payload_mut = ip::payload_mut(buffer_mut);
+                                tcp::set_checksum(payload_mut, payload_checksum);
                                 return true;
                             }
                         } else {
+                            // 发送到外网的地址，转换成内部监听
                             let _real_peer = (
                                 SocketAddrV4::new(src_addr, src_port),
                                 SocketAddrV4::new(dst_addr, dst_port),
                             );
-                            let unreal_src_port = if tcpck.flags() & Flags::SYN == Flags::SYN {
-                                // 初始SYN请求建连
-                                // 获取一个虚拟端口
-                                match tcp_unreal_context.write() {
-                                    Ok(mut a) => {
-                                        if a.real2unreal.contains_key(&_real_peer) {
-                                            None
-                                        } else {
-                                            Some(a.next(_real_peer))
+                            // 是否已经初始化
+                            let unreal_src_port = match tcp_unreal_context.write() {
+                                Ok(mut a) => {
+                                    if a.real2unreal.contains_key(&_real_peer) {
+                                        match a.real2unreal.get(&_real_peer) {
+                                            Some(unreal_context) => Some(*unreal_context),
+                                            None => None,
                                         }
+                                    } else {
+                                        Some(a.next(_real_peer))
                                     }
-                                    Err(_) => None,
                                 }
-                            } else {
-                                match tcp_unreal_context.read() {
-                                    Ok(a) => match a.real2unreal.get(&_real_peer) {
-                                        Some(unreal_context) => Some(*unreal_context),
-                                        None => None,
-                                    },
-                                    Err(_) => None,
-                                }
+                                Err(_) => None,
                             };
                             match unreal_src_port {
                                 Some(unreal_src_port) => {
                                     // 插入到虚拟
-                                    tcpck
-                                        .set_destination(tcp_kernel_src_port)
-                                        .unwrap()
-                                        .set_source(unreal_src_port)
-                                        .unwrap()
-                                        .set_checksum(0)
-                                        .unwrap();
-                                    let tcplen = tcpck.as_ref().len() as u16;
-
-                                    let ipck = ipck
-                                        .set_destination(ip)
-                                        .unwrap()
-                                        .set_checksum(0)
-                                        .unwrap()
-                                        .set_source(unreal_kernel_dst)
-                                        .unwrap();
-
-                                    ipck.update_checksum().unwrap();
+                                    {
+                                        let buffer_mut = buffer.as_mut();
+                                        let mut payload_mut = ip::payload_mut(buffer_mut);
+                                        tcp::set_destination(&mut payload_mut, tcp_kernel_src_port);
+                                        tcp::set_source(&mut payload_mut, unreal_src_port);
+                                        tcp::set_checksum(&mut payload_mut, 0);
+                                    }
+                                    {
+                                        let mut buffer_mut = buffer.as_mut();
+                                        ip::set_source4(&mut buffer_mut, unreal_kernel_dst);
+                                        ip::set_destination4(&mut buffer_mut, ip);
+                                        ip::update_checksum(&mut buffer_mut);
+                                    }
                                     let mut prefix = [0u8; 12];
-                                    prefix[0..4].copy_from_slice(&ipck.source().octets());
-                                    prefix[4..8].copy_from_slice(&ipck.destination().octets());
-                                    prefix[9] = Protocol::Tcp.into();
-                                    prefix[10] = (tcplen >> 8) as u8;
-                                    prefix[11] = tcplen as u8;
+                                    ip::copy_source4(&buffer, &mut prefix[0..4]);
+                                    ip::copy_destination4(&buffer, &mut prefix[4..8]);
+                                    prefix[9] = 6;
+                                    let payload = ip::payload(&buffer);
+                                    let payloadlen = payload.len();
+                                    prefix[10] = (payloadlen >> 8) as u8;
+                                    prefix[11] = payloadlen as u8;
                                     let mut result = checksum(0, &prefix);
-                                    result = checksum(result, ipck.payload());
-                                    let tcp_checksum = (!result) as u16;
-                                    let mut tcpck =
-                                        packet::tcp::Packet::new(ipck.payload_mut()).unwrap();
-                                    tcpck.set_checksum(tcp_checksum).unwrap();
+                                    result = checksum(result, payload);
+                                    let payload_checksum = (!result) as u16;
+                                    let buffer_mut = buffer.as_mut();
+                                    let payload_mut = ip::payload_mut(buffer_mut);
+                                    tcp::set_checksum(payload_mut, payload_checksum);
                                     return true;
                                 }
                                 None => {}
                             }
                         }
                     }
-                    _ => {}
+                    _ => {
+
+                    }
                 }
             }
-            Ok(packet::ip::Packet::V6(_)) => {}
             _ => {}
         }
         false
