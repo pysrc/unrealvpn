@@ -56,12 +56,15 @@ pub mod ip {
     pub fn header(buf: &[u8]) -> u8 {
 		buf[0] & 0b1111
 	}
+    pub fn header_len(buf: &[u8]) -> usize {
+		(header(&buf) as usize) << 2
+	}
     pub fn payload(buf: &[u8]) -> &[u8] {
-		let header_size = header(&buf) as usize * 4;
+		let header_size = header_len(&buf);
         &buf[header_size..]
 	}
     pub fn payload_mut(buf: &mut [u8]) -> &mut [u8] {
-		let header_size = header(&buf) as usize * 4;
+		let header_size = header_len(&buf);
         &mut buf[header_size..]
 	}
     pub fn set_source4(buf: &mut [u8], value: Ipv4Addr) {
@@ -77,7 +80,7 @@ pub mod ip {
         buf[10..12].copy_from_slice(&value.to_be_bytes());
 	}
     pub fn update_checksum(buf: &mut [u8]) {
-        let siz = header(&buf) as usize * 4;
+        let siz = header_len(&buf);
         set_checksum(buf, 0);
         let value = checksum(0, &buf[..siz]);
         set_checksum(buf, (!value) as u16);
