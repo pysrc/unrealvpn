@@ -1,5 +1,4 @@
 /// 此源码仅仅提供ip包转换为TCP/UDP的实现方式
-
 use std::{
     collections::HashMap,
     io::{self, Error, ErrorKind},
@@ -13,10 +12,14 @@ pub mod ip {
     use crate::checksum;
 
     pub enum Version {
-        V4, V6, Others
+        V4,
+        V6,
+        Others,
     }
     pub enum Protocol {
-        Udp, Tcp, Others
+        Udp,
+        Tcp,
+        Others,
     }
     // 版本
     pub fn version(buf: &[u8]) -> Version {
@@ -34,94 +37,85 @@ pub mod ip {
         }
     }
     pub fn source4(buf: &[u8]) -> Ipv4Addr {
-		Ipv4Addr::new(
-			buf[12],
-			buf[13],
-			buf[14],
-			buf[15])
-	}
+        Ipv4Addr::new(buf[12], buf[13], buf[14], buf[15])
+    }
     pub fn copy_source4(buf: &[u8], dst: &mut [u8]) {
         dst[0..4].copy_from_slice(&buf[12..16]);
-	}
+    }
     pub fn destination4(buf: &[u8]) -> Ipv4Addr {
-		Ipv4Addr::new(
-			buf[16],
-			buf[17],
-			buf[18],
-			buf[19])
-	}
+        Ipv4Addr::new(buf[16], buf[17], buf[18], buf[19])
+    }
     pub fn copy_destination4(buf: &[u8], dst: &mut [u8]) {
         dst[0..4].copy_from_slice(&buf[16..20]);
-	}
+    }
     pub fn header(buf: &[u8]) -> u8 {
-		buf[0] & 0b1111
-	}
+        buf[0] & 0b1111
+    }
     pub fn header_len(buf: &[u8]) -> usize {
-		(header(&buf) as usize) << 2
-	}
+        (header(&buf) as usize) << 2
+    }
     pub fn payload(buf: &[u8]) -> &[u8] {
-		let header_size = header_len(&buf);
+        let header_size = header_len(&buf);
         &buf[header_size..]
-	}
+    }
     pub fn payload_mut(buf: &mut [u8]) -> &mut [u8] {
-		let header_size = header_len(&buf);
+        let header_size = header_len(&buf);
         &mut buf[header_size..]
-	}
+    }
     pub fn set_source4(buf: &mut [u8], value: Ipv4Addr) {
-		buf[12 .. 16].copy_from_slice(&value.octets());
-	}
+        buf[12..16].copy_from_slice(&value.octets());
+    }
     pub fn set_destination4(buf: &mut [u8], value: Ipv4Addr) {
-		buf[16 .. 20].copy_from_slice(&value.octets());
-	}
+        buf[16..20].copy_from_slice(&value.octets());
+    }
     pub fn get_checksum(buf: &[u8]) -> u16 {
         u16::from_be_bytes([buf[10], buf[11]])
-	}
+    }
     pub fn set_checksum(buf: &mut [u8], value: u16) {
         buf[10..12].copy_from_slice(&value.to_be_bytes());
-	}
+    }
     pub fn update_checksum(buf: &mut [u8]) {
         let siz = header_len(&buf);
         set_checksum(buf, 0);
         let value = checksum(0, &buf[..siz]);
         set_checksum(buf, (!value) as u16);
-	}
-
+    }
 }
 
 pub mod udp {
     pub fn source(buf: &[u8]) -> u16 {
-		u16::from_be_bytes([buf[0], buf[1]])
-	}
+        u16::from_be_bytes([buf[0], buf[1]])
+    }
     pub fn destination(buf: &[u8]) -> u16 {
-		u16::from_be_bytes([buf[2], buf[3]])
-	}
+        u16::from_be_bytes([buf[2], buf[3]])
+    }
     pub fn set_source(buf: &mut [u8], value: u16) {
         buf[..2].copy_from_slice(&value.to_be_bytes());
-	}
+    }
     pub fn set_destination(buf: &mut [u8], value: u16) {
         buf[2..4].copy_from_slice(&value.to_be_bytes());
-	}
+    }
     pub fn set_checksum(buf: &mut [u8], value: u16) {
-		buf[6..8].copy_from_slice(&value.to_be_bytes());
-	}    
+        buf[6..8].copy_from_slice(&value.to_be_bytes());
+    }
 }
 
 pub mod tcp {
     pub fn source(buf: &[u8]) -> u16 {
-		u16::from_be_bytes([buf[0], buf[1]])
-	}
+        u16::from_be_bytes([buf[0], buf[1]])
+    }
     pub fn destination(buf: &[u8]) -> u16 {
-		u16::from_be_bytes([buf[2], buf[3]])
-	}
+        u16::from_be_bytes([buf[2], buf[3]])
+    }
     pub fn set_source(buf: &mut [u8], value: u16) {
         buf[..2].copy_from_slice(&value.to_be_bytes());
-	}
+    }
     pub fn set_destination(buf: &mut [u8], value: u16) {
         buf[2..4].copy_from_slice(&value.to_be_bytes());
-	}
+    }
     pub fn set_checksum(buf: &mut [u8], value: u16) {
-		buf[16..18].copy_from_slice(&value.to_be_bytes());
-	}    
+        buf[16..18].copy_from_slice(&value.to_be_bytes());
+    }
 }
 
 pub trait Layer3Device: Send + 'static {
@@ -145,7 +139,9 @@ pub trait Layer3Device: Send + 'static {
                         let src_addr = ip::source4(&buffer);
                         let dst_addr = ip::destination4(&buffer);
                         // 拒绝组播、多播udp，仅支持单播
-                        if (dst_addr.octets()[0] >= 224 && dst_addr.octets()[0] <= 239) || dst_addr.octets()[3] == 255 {
+                        if (dst_addr.octets()[0] >= 224 && dst_addr.octets()[0] <= 239)
+                            || dst_addr.octets()[3] == 255
+                        {
                             return false;
                         }
                         let payload = ip::payload(&buffer);
@@ -355,9 +351,7 @@ pub trait Layer3Device: Send + 'static {
                             }
                         }
                     }
-                    _ => {
-
-                    }
+                    _ => {}
                 }
             }
             _ => {}
@@ -510,7 +504,10 @@ pub struct UdpWorker {
 
 impl UdpWorker {
     // 收包
-    pub fn recv_from(&self, buf: &mut [u8])->std::io::Result<(SocketAddrV4, SocketAddrV4, usize)> {
+    pub fn recv_from(
+        &self,
+        buf: &mut [u8],
+    ) -> std::io::Result<(SocketAddrV4, SocketAddrV4, usize)> {
         loop {
             match self._listener.recv_from(buf) {
                 Ok((size, src)) => {
@@ -531,15 +528,16 @@ impl UdpWorker {
                     return Err(Error::new(ErrorKind::Other, e.to_string()));
                 }
             }
-        }        
-        
+        }
     }
     // 返包
-    pub fn send_back(&self, buf: &[u8], src: SocketAddrV4, dst: SocketAddrV4) -> io::Result<usize>{
+    pub fn send_back(&self, buf: &[u8], src: SocketAddrV4, dst: SocketAddrV4) -> io::Result<usize> {
         match self._unreal_context.read() {
             Ok(_context) => {
                 if let Some(port) = _context.real2unreal.get(&(src, dst)) {
-                    return self._listener.send_to(buf, SocketAddrV4::new(_context.unreal_ip, *port));
+                    return self
+                        ._listener
+                        .send_to(buf, SocketAddrV4::new(_context.unreal_ip, *port));
                 } else {
                     return Err(Error::new(ErrorKind::Other, "Not context"));
                 }
@@ -564,15 +562,29 @@ pub fn dev_run<T: Layer3Device>(mut dev: T) -> (TcpWorker, UdpWorker) {
     let unreal_kernel_dst = Ipv4Addr::new(u[0], u[1], u[2], u[3] + 1);
     let (tx, rx) = channel::<u16>();
     let (utx, urx) = channel::<u16>();
-    let tcp_unreal_context = Arc::new(RwLock::new(UnrealContext::new(10000, 40000, unreal_kernel_dst)));
+    let tcp_unreal_context = Arc::new(RwLock::new(UnrealContext::new(
+        10000,
+        40000,
+        unreal_kernel_dst,
+    )));
     let tcp_unreal_contextw = tcp_unreal_context.clone();
-    let udp_unreal_context = Arc::new(RwLock::new(UnrealContext::new(10000, 40000, unreal_kernel_dst)));
+    let udp_unreal_context = Arc::new(RwLock::new(UnrealContext::new(
+        10000,
+        40000,
+        unreal_kernel_dst,
+    )));
     let udp_unreal_contextw = udp_unreal_context.clone();
     std::thread::spawn(move || {
         let tcp_kernel_src_port = rx.recv().unwrap();
         let udp_kernel_src_port = urx.recv().unwrap();
         log::info!("Start tun.");
-        dev.server_forever(unreal_kernel_dst, tcp_kernel_src_port, tcp_unreal_context, udp_kernel_src_port, udp_unreal_context);
+        dev.server_forever(
+            unreal_kernel_dst,
+            tcp_kernel_src_port,
+            tcp_unreal_context,
+            udp_kernel_src_port,
+            udp_unreal_context,
+        );
     });
     // tcp部分
     let _tcp_listener = get_tcp_listener(ip);
@@ -584,37 +596,34 @@ pub fn dev_run<T: Layer3Device>(mut dev: T) -> (TcpWorker, UdpWorker) {
     let sport = _udp_listener.local_addr().unwrap().port();
     log::info!("Udp listen on: {}", sport);
     utx.send(sport).unwrap();
-    (TcpWorker {
-        _listener: _tcp_listener,
-        _unreal_context: tcp_unreal_contextw,
-    },
-    UdpWorker {
-        _listener: _udp_listener,
-        _unreal_context: udp_unreal_contextw,
-    }
+    (
+        TcpWorker {
+            _listener: _tcp_listener,
+            _unreal_context: tcp_unreal_contextw,
+        },
+        UdpWorker {
+            _listener: _udp_listener,
+            _unreal_context: udp_unreal_contextw,
+        },
     )
 }
 
 #[inline]
-fn checksum(mid: u32, buf: &[u8]) -> u32 {
-    let mut i = 0usize;
-    let mut result = mid;
-    while i < buf.len() {
-        let k = i + 1;
-        if k >= buf.len() {
-            result += (buf[i] as u32) << 8;
-            while result > 0xffff {
-                result = (result >> 16) + (result & 0xffff);
-            }
-            break;
-        }
-        result += ((buf[i] as u32) << 8) | (buf[k] as u32);
-        while result > 0xffff {
-            result = (result >> 16) + (result & 0xffff);
-        }
-        i += 2;
+fn checksum(mut sum: u32, buffer: &[u8]) -> u32 {
+    // Sum all 16-bit words
+    for i in (0..buffer.len()).step_by(2) {
+        let word = if i + 1 < buffer.len() {
+            ((buffer[i] as u32) << 8) + (buffer[i + 1] as u32)
+        } else {
+            (buffer[i] as u32) << 8
+        };
+        sum = sum.wrapping_add(word);
     }
-    result
+    // Add carry bits to the sum
+    while (sum >> 16) > 0 {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+    sum
 }
 
 fn get_tcp_listener(ip: Ipv4Addr) -> TcpListener {
@@ -629,7 +638,7 @@ fn get_tcp_listener(ip: Ipv4Addr) -> TcpListener {
 }
 
 fn get_udp_listener(ip: Ipv4Addr) -> UdpSocket {
-    loop{
+    loop {
         let listener = UdpSocket::bind(SocketAddrV4::new(ip, 0));
         if let Ok(listener) = listener {
             return listener;
