@@ -36,6 +36,13 @@ fn mask2prefix(mask: &str) -> u8 {
     res
 }
 
+// 24 -> [255, 255, 255, 0]
+fn prefix_len_to_netmask(prefix: u8) -> [u8; 4] {
+    let mut u64max = u64::MAX;
+    u64max = u64max.wrapping_shl(32 - prefix as u32);
+    (u64max as u32).to_be_bytes()
+}
+
 fn route_with_mask(route: String) -> String {
     let mut route = route;
     if !route.contains("/") {
@@ -59,39 +66,7 @@ pub mod os_tun {
     };
     use tun::platform::Device;
 
-    fn nmatch(n: u8) -> Option<u8> {
-        match n {
-            0 => Some(0),
-            1 => Some(0b1000_0000),
-            2 => Some(0b1100_0000),
-            3 => Some(0b1110_0000),
-            4 => Some(0b1111_0000),
-            5 => Some(0b1111_1000),
-            6 => Some(0b1111_1100),
-            7 => Some(0b1111_1110),
-            8 => Some(0b1111_1111),
-            _ => None,
-        }
-    }
-
-    // 24 -> [255, 255, 255, 0]
-    fn prefix_len_to_netmask(prefix: u8) -> [u8; 4] {
-        let mut mask = [0u8, 0u8, 0u8, 0u8];
-        let mut p = prefix;
-        for i in 0..4 {
-            if p >= 8 {
-                mask[i] = 255;
-                p -= 8;
-            } else {
-                match nmatch(p) {
-                    Some(n) => mask[i] = n,
-                    None => panic!("Error netmask prefix: {}", prefix),
-                }
-                break;
-            }
-        }
-        return mask;
-    }
+    use crate::prefix_len_to_netmask;
 
     pub fn new(
         tun_name: String,
