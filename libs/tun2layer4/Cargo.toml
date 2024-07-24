@@ -10,4 +10,4 @@ edition = "2021"
 # layer3to4 = { git = "https://github.com/pysrc/layer3to4.git" }
 layer3to4 = {path = "../layer3to4"}
 log = "0.4"
-tun = {path = "../../olibs/rust-tun"}
+tun = {path = "../libs/rust-tun"}
