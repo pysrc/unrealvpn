@@ -358,7 +358,9 @@ pub trait Layer3Device: Send + 'static {
         }
         false
     }
-    // 运行tun设备
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize>;
+    fn write(&mut self, buffer: &[u8]) -> io::Result<()>;
+    // 从tun设备收发数据包
     fn server_forever(
         &mut self,
         unreal_kernel_dst: Ipv4Addr,
@@ -366,7 +368,35 @@ pub trait Layer3Device: Send + 'static {
         tcp_unreal_context: Arc<RwLock<UnrealContext>>,
         udp_kernel_src_port: u16,
         udp_unreal_context: Arc<RwLock<UnrealContext>>,
-    );
+    ) {
+        let mut buffer = vec![0u8; 4096];
+        loop {
+            // 收到ip包数据
+            let _len = match self.read(&mut buffer) {
+                Ok(_len) => _len,
+                Err(e) => {
+                    log::error!("Tun dev read err: {}", e);
+                    return;
+                }
+            };
+            if _len == 0 {
+                continue;
+            }
+            // 处理包
+            let success = self.handle_packet(
+                &mut buffer[.._len],
+                unreal_kernel_dst,
+                tcp_kernel_src_port,
+                tcp_unreal_context.clone(),
+                udp_kernel_src_port,
+                udp_unreal_context.clone(),
+            );
+            // 发送包
+            if success {
+                self.write(&buffer[.._len]).unwrap();
+            }
+        }
+    }
 }
 
 pub struct UnrealContext {

@@ -54,7 +54,8 @@ fn route_with_mask(route: String) -> String {
 pub mod os_tun {
     use layer3to4::{dev_run, Layer3Device, TcpWorker, UdpWorker};
     use std::{
-        io::{Read, Write}, net::Ipv4Addr
+        io::{self, Read, Write},
+        net::Ipv4Addr,
     };
     use tun::platform::Device;
 
@@ -170,41 +171,13 @@ pub mod os_tun {
             self.ip
         }
 
-        fn server_forever(
-            &mut self,
-            unreal_kernel_dst: Ipv4Addr,
-            tcp_kernel_src_port: u16,
-            tcp_unreal_context: std::sync::Arc<std::sync::RwLock<layer3to4::UnrealContext>>,
-            udp_kernel_src_port: u16,
-            udp_unreal_context: std::sync::Arc<std::sync::RwLock<layer3to4::UnrealContext>>,
-        ) {
-            let mut buffer = vec![0u8; 4096];
-            loop {
-                // 收到ip包数据
-                let _len = match self.dev.read(&mut buffer) {
-                    Ok(_len) => _len,
-                    Err(e) => {
-                        log::error!("Tun dev read err: {}", e);
-                        return;
-                    }
-                };
-                if _len == 0 {
-                    continue;
-                }
-                // 处理包
-                let success = self.handle_packet(
-                    &mut buffer[.._len],
-                    unreal_kernel_dst,
-                    tcp_kernel_src_port,
-                    tcp_unreal_context.clone(),
-                    udp_kernel_src_port,
-                    udp_unreal_context.clone(),
-                );
-                // 发送包
-                if success {
-                    self.dev.write_all(&buffer[.._len]).unwrap();
-                }
-            }
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            // 收到ip包数据
+            self.dev.read(buffer)
+        }
+
+        fn write(&mut self, buffer: &[u8]) -> io::Result<()> {
+            self.dev.write_all(buffer)
         }
     }
 }
