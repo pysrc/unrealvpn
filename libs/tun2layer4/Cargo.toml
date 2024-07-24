@@ -10,11 +10,4 @@ edition = "2021"
 # layer3to4 = { git = "https://github.com/pysrc/layer3to4.git" }
 layer3to4 = {path = "../layer3to4"}
 log = "0.4"
-
-
-[target.'cfg(target_os = "windows")'.dependencies]
-wintun = "0.3"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-tun = "0.5"
-
+tun = {path = "../../olibs/rust-tun"}
