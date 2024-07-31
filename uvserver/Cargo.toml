@@ -21,4 +21,7 @@ serde_yaml = "0.9"
 tokio = { version = "1", features = ["full"] }
 tokio-rustls = { version = "0.23.4" }
 rustls-pemfile = "1.0.2"
-async_smux = "0.3"
+# async_smux = "0.3"
+yamux = "0.13.1"
+tokio-util = { version = "0.7", features=["compat"] }
+futures = { version = "0.3", default-features = false, features = ["std"] }

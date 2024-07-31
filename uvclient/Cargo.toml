@@ -27,7 +27,11 @@ rustls-pemfile = "1.0.2"
 
 tun2layer4 = {path = "../libs/tun2layer4"}
 
-async_smux = "0.3"
+# async_smux = "0.3"
+yamux = "0.13.1"
+tokio-util = { version = "0.7", features=["compat"] }
+futures = { version = "0.3", default-features = false, features = ["std"] }
+
 
 [target.'cfg(windows)'.build-dependencies]
 winres = "0.1"

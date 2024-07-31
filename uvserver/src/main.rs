@@ -1,8 +1,19 @@
-use std::{collections::{HashMap, VecDeque}, fs::File, io::{BufReader, Cursor, Read}, net::{Ipv4Addr, SocketAddrV4}, num::NonZeroU64, sync::Arc};
+use std::{collections::{HashMap, VecDeque}, fs::File, io::{BufReader, Cursor, Read}, net::{Ipv4Addr, SocketAddrV4}, sync::Arc};
 
+use futures::{future, stream, Stream, StreamExt};
 use serde::{Deserialize, Serialize};
 use tokio::{io::{split, AsyncReadExt, AsyncWriteExt}, net::{TcpListener, TcpStream, UdpSocket}, select, sync::{mpsc, Mutex, RwLock}, time};
 use tokio_rustls::{rustls, TlsAcceptor};
+use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
+use yamux::{Connection, ConnectionError, Mode};
+
+pub async fn noop_server(c: impl Stream<Item = Result<yamux::Stream, yamux::ConnectionError>>) {
+    c.for_each(|maybe_stream| {
+        drop(maybe_stream);
+        future::ready(())
+    })
+    .await;
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Config {
@@ -143,19 +154,25 @@ async fn main() {
                     match _cmd {
                         CMD_TCP => {
                             log::info!("TCP client income {}", _addr);
-                            let (_, mut mux_acceptor, mux_worker) = async_smux::MuxBuilder::server().with_keep_alive_interval(NonZeroU64::new(30).expect(format!("{} {}", line!(), "NonZeroU64").as_str())).with_connection(ctrl_conn).build();
-                            tokio::spawn(mux_worker);
+                            let mut mconn = Connection::new(
+                                ctrl_conn.compat(),
+                                yamux::Config::default(),
+                                Mode::Server,
+                            );
+                            let mut server = stream::poll_fn(move |cx| mconn.poll_next_inbound(cx));
                             loop {
-                                let mut _stream = match mux_acceptor.accept().await {
-                                    Some(_cc) => _cc,
-                                    None => {
+                                let mut _stream = match server.next().await.ok_or(ConnectionError::Closed).unwrap() {
+                                    Ok(_cc) => _cc,
+                                    Err(_) => {
                                         log::info!("client break {}", _addr);
                                         return;
                                     }
                                 };
+                                let mut _stream = _stream.compat();
                                 tokio::spawn(async move {
+                                    // let _buf = [0u8;2];
                                     let _len = match _stream.read_u16().await {
-                                        Ok(_s) => _s as usize,
+                                        Ok(i) => i as usize,
                                         Err(e) => {
                                             log::info!("{} {}", line!(), e);
                                             return;

@@ -1,8 +1,19 @@
-use std::{fs::File, io::{BufReader, Cursor, Read, Write}, net::{Ipv4Addr, SocketAddrV4}, num::NonZeroU64, str::FromStr, sync::Arc};
+use std::{fs::File, io::{BufReader, Cursor, Read, Write}, net::{Ipv4Addr, SocketAddrV4}, str::FromStr, sync::{Arc, Mutex}};
 
+use futures::{future, stream, Stream, StreamExt};
 use serde::{Deserialize, Serialize};
-use tokio::{io::{split, AsyncReadExt, AsyncWriteExt}, net::TcpStream, time};
+use tokio::{io::{split, AsyncReadExt, AsyncWriteExt}, net::TcpStream, task};
 use tokio_rustls::{rustls, webpki, TlsConnector};
+use tokio_util::compat::{FuturesAsyncReadCompatExt, TokioAsyncReadCompatExt};
+use yamux::{Connection, Mode};
+
+pub async fn noop_server(c: impl Stream<Item = Result<yamux::Stream, yamux::ConnectionError>>) {
+    c.for_each(|maybe_stream| {
+        drop(maybe_stream);
+        future::ready(())
+    })
+    .await;
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct TunConfig {
@@ -130,44 +141,22 @@ async fn main() {
     let ctrl_conn = TcpStream::connect(cfg.server.clone()).await.unwrap();
     let mut ctrl_conn: tokio_rustls::client::TlsStream<TcpStream> = connector.connect(domain.clone(), ctrl_conn).await.unwrap();
     ctrl_conn.write_u8(CMD_TCP).await.unwrap();
-    let (mut mux_connector, _, mut mux_worker) = async_smux::MuxBuilder::client().with_keep_alive_interval(NonZeroU64::new(30).unwrap()).with_connection(ctrl_conn).build();
-    tokio::spawn(mux_worker);
+    
+    let mconn = Connection::new(
+        ctrl_conn.compat(),
+        yamux::Config::default(),
+        Mode::Client,
+    );
+    let mconn = Arc::new(Mutex::new(mconn));
+    let _mconn = mconn.clone();
+    task::spawn(noop_server(stream::poll_fn(move |cx| {
+        _mconn.lock().unwrap().poll_next_inbound(cx)
+    })));
     // 面向于inside端
     while let Ok(tcp_accept) = tcp_worker.accept() {
         log::info!("dst: {}", tcp_accept.dst);
-        let mut _mux_stream = match mux_connector.connect() {
-            Ok(cc) => cc,
-            Err(e) => {
-                log::info!("{}->{}", line!(), e);
-                loop {
-                    time::sleep(time::Duration::from_secs(1)).await;
-                    let connector = connector.clone();
-                    let ctrl_conn = match TcpStream::connect(cfg.server.clone()).await {
-                        Ok(cc) => cc,
-                        Err(e) => {
-                            log::info!("{}->{}", line!(), e);
-                            continue;
-                        }
-                    };
-                    let ctrl_conn = match connector.connect(domain.clone(), ctrl_conn).await {
-                        Ok(cc) => cc,
-                        Err(e) => {
-                            log::info!("{}->{}", line!(), e);
-                            continue;
-                        }
-                    };
-                    (mux_connector, _, mux_worker) = async_smux::MuxBuilder::client().with_keep_alive_interval(NonZeroU64::new(30).unwrap()).with_connection(ctrl_conn).build();
-                    tokio::spawn(mux_worker);
-                    match mux_connector.connect() {
-                        Ok(cc) => break cc,
-                        Err(e) => {
-                            log::info!("{}->{}", line!(), e);
-                            continue;
-                        }
-                    };
-                }
-            }
-        };
+        let stream = future::poll_fn(|cx| mconn.lock().unwrap().poll_new_outbound(cx)).await.unwrap();
+        let mut _mux_stream = stream.compat();
         
         tokio::spawn(async move {
             let conn = tcp_accept.stream.try_clone().unwrap();
