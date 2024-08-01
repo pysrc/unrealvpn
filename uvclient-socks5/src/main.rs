@@ -7,6 +7,7 @@ use tokio::net::TcpListener;
 use tokio_rustls::{rustls, webpki, TlsConnector};
 
 mod tcp;
+mod relay;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct Config {
@@ -85,7 +86,7 @@ async fn main() {
     };
     let mut _domain_cache = Arc::new(RwLock::new(_domain_cache));
 
-    let mut t = 1;
+    let r = relay::Delay::new();
     loop {
         listener = tcp::worker(
             listener,
@@ -97,13 +98,6 @@ async fn main() {
             _domain_cache.clone(),
         )
         .await;
-        // 指数退让
-        log::info!("tcp waite for {t} secs.");
-        tokio::time::sleep(tokio::time::Duration::from_secs(t)).await;
-        t <<= 1;
-        if t > 60 {
-            // 1 min 重置
-            t = 1;
-        }
+        r.delay().await;
     }
 }
