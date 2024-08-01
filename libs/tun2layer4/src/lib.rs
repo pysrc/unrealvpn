@@ -1,3 +1,6 @@
+pub use layer3to4::EN_TCP;
+pub use layer3to4::EN_UDP;
+
 fn binmatch(n: u8) -> Option<u8> {
     match n {
         0b0000_0000 => Some(0),
@@ -56,9 +59,9 @@ pub mod os_tun {
     use layer3to4::{dev_run, Layer3Device, TcpWorker, UdpWorker};
     use std::{net::Ipv4Addr, sync::Arc};
 
-    pub fn new(tun_name: String, ip: Ipv4Addr, mask: u8, routes: Option<Vec<String>>) -> (TcpWorker, UdpWorker) {
+    pub fn new(tun_name: String, opt: u8, ip: Ipv4Addr, mask: u8, routes: Option<Vec<String>>) -> (Option<TcpWorker>, Option<UdpWorker>) {
         let dev = TunDevice::new(tun_name, ip, mask, routes);
-        dev_run(dev)
+        dev_run(dev, opt)
     }
 
     pub struct TunDevice {
@@ -211,9 +214,9 @@ pub mod os_tun {
         return mask;
     }
 
-    pub fn new(tun_name: String, ip: Ipv4Addr, mask: u8, routes: Option<Vec<String>>) -> (TcpWorker, UdpWorker) {
+    pub fn new(tun_name: String, opt: u8, ip: Ipv4Addr, mask: u8, routes: Option<Vec<String>>) -> (Option<TcpWorker>, Option<UdpWorker>) {
         let dev = TunDevice::new(tun_name, ip, mask, routes);
-        dev_run(dev)
+        dev_run(dev, opt)
     }
 
     pub struct TunDevice {

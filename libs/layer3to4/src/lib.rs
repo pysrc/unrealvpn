@@ -3,7 +3,7 @@ use std::{
     collections::HashMap,
     io::{self, Error, ErrorKind},
     net::{Ipv4Addr, SocketAddrV4, TcpListener, TcpStream, UdpSocket},
-    sync::{mpsc::channel, Arc, RwLock},
+    sync::{Arc, RwLock},
 };
 
 pub mod ip {
@@ -136,6 +136,10 @@ pub trait Layer3Device: Send + 'static {
             ip::Version::V4 => {
                 match ip::protocol(&buffer) {
                     ip::Protocol::Udp => {
+                        // 不监听udp
+                        if udp_kernel_src_port == 0 {
+                            return false;
+                        }
                         let src_addr = ip::source4(&buffer);
                         let dst_addr = ip::destination4(&buffer);
                         // 拒绝组播、多播udp，仅支持单播
@@ -247,6 +251,10 @@ pub trait Layer3Device: Send + 'static {
                         }
                     }
                     ip::Protocol::Tcp => {
+                        // 不解析tcp
+                        if tcp_kernel_src_port == 0 {
+                            return false;
+                        }
                         let src_addr = ip::source4(&buffer);
                         let dst_addr = ip::destination4(&buffer);
                         let payload = ip::payload(&buffer);
@@ -556,27 +564,55 @@ impl UdpWorker {
     }
 }
 
-pub fn dev_run<T: Layer3Device>(mut dev: T) -> (TcpWorker, UdpWorker) {
+pub const EN_TCP: u8 = 0b1000_0000;
+pub const EN_UDP: u8 = 0b0100_0000;
+pub fn dev_run<T: Layer3Device>(mut dev: T, opt: u8) -> (Option<TcpWorker>, Option<UdpWorker>) {
     let ip = dev.ip();
     let u = ip.octets();
     let unreal_kernel_dst = Ipv4Addr::new(u[0], u[1], u[2], u[3] + 1);
-    let (tx, rx) = channel::<u16>();
-    let (utx, urx) = channel::<u16>();
     let tcp_unreal_context = Arc::new(RwLock::new(UnrealContext::new(
         10000,
         40000,
         unreal_kernel_dst,
     )));
-    let tcp_unreal_contextw = tcp_unreal_context.clone();
     let udp_unreal_context = Arc::new(RwLock::new(UnrealContext::new(
         10000,
         40000,
         unreal_kernel_dst,
     )));
-    let udp_unreal_contextw = udp_unreal_context.clone();
+    let mut _tcp_port = 0;
+    let mut _udp_port = 0;
+    let _tcp = if opt & EN_TCP == EN_TCP {
+        // TCP
+        let tcp_unreal_contextw = tcp_unreal_context.clone();
+        // tcp部分
+        let _tcp_listener = get_tcp_listener(ip);
+        _tcp_port = _tcp_listener.local_addr().unwrap().port();
+        log::info!("Tcp listen on: {}", _tcp_port);
+        Some(TcpWorker {
+            _listener: _tcp_listener,
+            _unreal_context: tcp_unreal_contextw,
+        })
+    } else {
+        None
+    };
+    let _udp = if opt & EN_UDP == EN_UDP {
+        let udp_unreal_contextw = udp_unreal_context.clone();
+        // udp部分
+        let _udp_listener = get_udp_listener(ip);
+        _udp_port = _udp_listener.local_addr().unwrap().port();
+        log::info!("Udp listen on: {}", _udp_port);
+        Some(UdpWorker {
+            _listener: _udp_listener,
+            _unreal_context: udp_unreal_contextw,
+        })
+    } else {
+        None
+    };
+    
     std::thread::spawn(move || {
-        let tcp_kernel_src_port = rx.recv().unwrap();
-        let udp_kernel_src_port = urx.recv().unwrap();
+        let tcp_kernel_src_port = _tcp_port;
+        let udp_kernel_src_port = _udp_port;
         log::info!("Start tun.");
         dev.server_forever(
             unreal_kernel_dst,
@@ -586,26 +622,8 @@ pub fn dev_run<T: Layer3Device>(mut dev: T) -> (TcpWorker, UdpWorker) {
             udp_unreal_context,
         );
     });
-    // tcp部分
-    let _tcp_listener = get_tcp_listener(ip);
-    let sport = _tcp_listener.local_addr().unwrap().port();
-    log::info!("Tcp listen on: {}", sport);
-    tx.send(sport).unwrap();
-    // udp部分
-    let _udp_listener = get_udp_listener(ip);
-    let sport = _udp_listener.local_addr().unwrap().port();
-    log::info!("Udp listen on: {}", sport);
-    utx.send(sport).unwrap();
-    (
-        TcpWorker {
-            _listener: _tcp_listener,
-            _unreal_context: tcp_unreal_contextw,
-        },
-        UdpWorker {
-            _listener: _udp_listener,
-            _unreal_context: udp_unreal_contextw,
-        },
-    )
+    
+    (_tcp, _udp)
 }
 
 #[inline]
