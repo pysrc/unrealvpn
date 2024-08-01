@@ -1,5 +1,7 @@
 pub use layer3to4::EN_TCP;
 pub use layer3to4::EN_UDP;
+pub use layer3to4::UdpWorker;
+pub use layer3to4::TcpWorker;
 
 fn binmatch(n: u8) -> Option<u8> {
     match n {

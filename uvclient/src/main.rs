@@ -1,19 +1,16 @@
 use std::{
     fs::File,
     io::{BufReader, Cursor, Read, Write},
-    net::{Ipv4Addr, SocketAddrV4},
-    num::NonZeroU64,
+    net::Ipv4Addr,
     str::FromStr,
     sync::Arc,
 };
 
 use serde::{Deserialize, Serialize};
-use tokio::{
-    io::{split, AsyncReadExt, AsyncWriteExt},
-    net::TcpStream,
-    time,
-};
 use tokio_rustls::{rustls, webpki, TlsConnector};
+
+mod udp;
+mod tcp;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct TunConfig {
@@ -83,9 +80,6 @@ pub fn tls_cert(cert: &[u8], name: &str) -> (TlsConnector, rustls::ServerName) {
     (connector, server_name)
 }
 
-const CMD_UDP: u8 = 1;
-const CMD_TCP: u8 = 2;
-
 fn main() {
     simple_logger::init_with_level(log::Level::Info).unwrap();
     if cfg!(target_os = "windows") {
@@ -119,52 +113,24 @@ fn main() {
     
     let mut joins = Vec::with_capacity(2);
 
-    if let Some(udp_worker) = oudp_worker {
+    if let Some(mut udp_worker) = oudp_worker {
         let server_udp: String = cfg.server.clone();
         let connector_udp = connector.clone();
         let domain_udp = domain.clone();
         let jn = std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
-                // udp
-                let udp_ctrl_conn = TcpStream::connect(server_udp.clone()).await.unwrap();
-                let mut udp_ctrl_conn: tokio_rustls::client::TlsStream<TcpStream> = connector_udp
-                    .connect(domain_udp.clone(), udp_ctrl_conn)
-                    .await
-                    .unwrap();
-                udp_ctrl_conn.write_u8(CMD_UDP).await.unwrap();
-                let (mut r, mut w) = split(udp_ctrl_conn);
-                let udp_worker2 = udp_worker.clone();
-                tokio::spawn(async move {
-                    let mut key = [0u8; 12];
-                    let mut buf = vec![0u8; 2048];
-                    loop {
-                        r.read_exact(&mut key).await.unwrap();
-                        let src = SocketAddrV4::new(
-                            Ipv4Addr::new(key[0], key[1], key[2], key[3]),
-                            u16::from_be_bytes([key[4], key[5]]),
-                        );
-                        let dst = SocketAddrV4::new(
-                            Ipv4Addr::new(key[6], key[7], key[8], key[9]),
-                            u16::from_be_bytes([key[10], key[11]]),
-                        );
-                        let _len = r.read_u16().await.unwrap() as usize;
-                        r.read_exact(&mut buf[.._len]).await.unwrap();
-                        udp_worker2.send_back(&buf[.._len], src, dst).unwrap();
+                let mut t = 1;
+                loop {
+                    udp_worker = udp::worker(server_udp.clone(), connector_udp.clone(), domain_udp.clone(), udp_worker.clone()).await;
+                    // 指数退让
+                    log::info!("udp waite for {t} secs.");
+                    tokio::time::sleep(tokio::time::Duration::from_secs(t)).await;
+                    t <<= 1;
+                    if t > 60 {
+                        // 1 min 重置
+                        t = 1;
                     }
-                });
-                let mut key = [0u8; 12];
-                let mut buf = vec![0u8; 2048];
-                // 阻塞操作提出去
-                while let Ok((src, dst, size)) = udp_worker.recv_from(&mut buf) {
-                    key[..4].copy_from_slice(&src.ip().octets());
-                    key[4..6].copy_from_slice(&src.port().to_be_bytes());
-                    key[6..10].copy_from_slice(&dst.ip().octets());
-                    key[10..12].copy_from_slice(&dst.port().to_be_bytes());
-                    w.write_all(&key).await.unwrap();
-                    w.write_u16(size as u16).await.unwrap();
-                    w.write_all(&buf[..size]).await.unwrap();
-                    w.flush().await.unwrap();
                 }
             });
         });
@@ -172,75 +138,21 @@ fn main() {
     }
 
     // tcp
-    if let Some(tcp_worker) = otcp_worker {
+    if let Some(mut tcp_worker) = otcp_worker {
         let jn = std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
-                let ctrl_conn = TcpStream::connect(cfg.server.clone()).await.unwrap();
-                let mut ctrl_conn: tokio_rustls::client::TlsStream<TcpStream> =
-                    connector.connect(domain.clone(), ctrl_conn).await.unwrap();
-                ctrl_conn.write_u8(CMD_TCP).await.unwrap();
-                let (mut mux_connector, _, mut mux_worker) = async_smux::MuxBuilder::client()
-                    .with_keep_alive_interval(NonZeroU64::new(30).unwrap())
-                    .with_connection(ctrl_conn)
-                    .build();
-                tokio::spawn(mux_worker);
-                // 面向于inside端
-                while let Ok(tcp_accept) = tcp_worker.accept() {
-                    log::info!("dst: {}", tcp_accept.dst);
-                    let mut _mux_stream = match mux_connector.connect() {
-                        Ok(cc) => cc,
-                        Err(e) => {
-                            log::info!("{}->{}", line!(), e);
-                            loop {
-                                time::sleep(time::Duration::from_secs(1)).await;
-                                let connector = connector.clone();
-                                let ctrl_conn = match TcpStream::connect(cfg.server.clone()).await {
-                                    Ok(cc) => cc,
-                                    Err(e) => {
-                                        log::info!("{}->{}", line!(), e);
-                                        continue;
-                                    }
-                                };
-                                let ctrl_conn =
-                                    match connector.connect(domain.clone(), ctrl_conn).await {
-                                        Ok(cc) => cc,
-                                        Err(e) => {
-                                            log::info!("{}->{}", line!(), e);
-                                            continue;
-                                        }
-                                    };
-                                (mux_connector, _, mux_worker) = async_smux::MuxBuilder::client()
-                                    .with_keep_alive_interval(NonZeroU64::new(30).unwrap())
-                                    .with_connection(ctrl_conn)
-                                    .build();
-                                tokio::spawn(mux_worker);
-                                match mux_connector.connect() {
-                                    Ok(cc) => break cc,
-                                    Err(e) => {
-                                        log::info!("{}->{}", line!(), e);
-                                        continue;
-                                    }
-                                };
-                            }
-                        }
-                    };
-
-                    tokio::spawn(async move {
-                        let conn = tcp_accept.stream.try_clone().unwrap();
-                        conn.set_nonblocking(true).unwrap();
-                        let mut src_stream = tokio::net::TcpStream::from_std(conn).unwrap();
-                        let target = format!(
-                            "{}:{}",
-                            tcp_accept.dst.ip().to_string(),
-                            tcp_accept.dst.port()
-                        );
-                        _mux_stream.write_u16(target.len() as u16).await.unwrap();
-                        _mux_stream.write_all(target.as_bytes()).await.unwrap();
-                        _mux_stream.flush().await.unwrap();
-                        _ = tokio::io::copy_bidirectional(&mut _mux_stream, &mut src_stream).await;
-                        _ = _mux_stream.shutdown().await;
-                    });
+                let mut t = 1;
+                loop {
+                    tcp_worker = tcp::worker(cfg.server.clone(), connector.clone(), domain.clone(), tcp_worker).await;
+                    // 指数退让
+                    log::info!("tcp waite for {t} secs.");
+                    tokio::time::sleep(tokio::time::Duration::from_secs(t)).await;
+                    t <<= 1;
+                    if t > 60 {
+                        // 1 min 重置
+                        t = 1;
+                    }
                 }
             });
         });
