@@ -11,7 +11,7 @@ use tokio_rustls::{rustls, webpki, TlsConnector};
 
 mod udp;
 mod tcp;
-mod relay;
+mod delay;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct TunConfig {
@@ -121,7 +121,7 @@ fn main() {
         let jn = std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
-                let r = relay::Delay::new();
+                let r = delay::Delay::new();
                 loop {
                     udp_worker = udp::worker(server_udp.clone(), connector_udp.clone(), domain_udp.clone(), udp_worker.clone()).await;
                     r.delay().await;
@@ -136,7 +136,7 @@ fn main() {
         let jn = std::thread::spawn(move || {
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
-                let r = relay::Delay::new();
+                let r = delay::Delay::new();
                 loop {
                     tcp_worker = tcp::worker(cfg.server.clone(), connector.clone(), domain.clone(), tcp_worker).await;
                     r.delay().await;
