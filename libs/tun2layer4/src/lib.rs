@@ -186,6 +186,28 @@ pub mod os_tun {
     };
     use tun::platform::Device;
 
+    struct TransPacket {
+        ipacket: &'static mut [u8]
+    }
+    impl TransPacket {
+        fn new(data: &'static mut [u8]) -> Self {
+            TransPacket {
+                ipacket: data
+            }
+        }
+    }
+    impl layer3to4::IPacket for TransPacket {
+        fn bytes_mut(&mut self) -> &mut [u8] {
+            &mut self.ipacket
+        }
+
+        fn bytes(&self) -> &[u8] {
+            &self.ipacket
+        }
+    }
+
+    static mut BUFFER: Vec<u8> = Vec::new();
+
     fn nmatch(n: u8) -> Option<u8> {
         match n {
             0 => Some(0),
@@ -263,7 +285,10 @@ pub mod os_tun {
                         .unwrap();
                 }
             }
-            TunDevice { ip, dev }
+            unsafe {
+                BUFFER.resize(4096, 0);
+            }
+            TunDevice { ip, dev}
         }
     }
 
@@ -272,41 +297,32 @@ pub mod os_tun {
             self.ip
         }
 
-        fn server_forever(
-            &mut self,
-            unreal_kernel_dst: Ipv4Addr,
-            tcp_kernel_src_port: u16,
-            tcp_unreal_context: std::sync::Arc<std::sync::RwLock<layer3to4::UnrealContext>>,
-            udp_kernel_src_port: u16,
-            udp_unreal_context: std::sync::Arc<std::sync::RwLock<layer3to4::UnrealContext>>,
-        ) {
-            let mut buffer = vec![0u8; 4096];
-            loop {
-                // 收到ip包数据
-                let _len = match self.dev.read(&mut buffer) {
-                    Ok(_len) => _len,
-                    Err(e) => {
-                        log::error!("Tun dev read err: {}", e);
-                        return;
+        // 读数据包
+        fn read(&mut self) -> Box<dyn layer3to4::IPacket> {
+            unsafe {
+                loop {
+                    // 收到ip包数据
+                    BUFFER.set_len(BUFFER.capacity());
+                    #[allow(static_mut_refs)]
+                    let _len = match self.dev.read(&mut BUFFER) {
+                        Ok(_len) => _len,
+                        Err(e) => {
+                            panic!("panic {}", e);
+                        }
+                    };
+                    if _len == 0 {
+                        continue;
                     }
-                };
-                if _len == 0 {
-                    continue;
-                }
-                // 处理包
-                let success = self.handle_packet(
-                    &mut buffer[.._len],
-                    unreal_kernel_dst,
-                    tcp_kernel_src_port,
-                    tcp_unreal_context.clone(),
-                    udp_kernel_src_port,
-                    udp_unreal_context.clone(),
-                );
-                // 发送包
-                if success {
-                    self.dev.write_all(&buffer[.._len]).unwrap();
+                    BUFFER.set_len(_len);
+                    #[allow(static_mut_refs)]
+                    return Box::new(TransPacket::new(&mut BUFFER));
                 }
             }
+        }
+        // 写数据包
+        fn write(&mut self, data: Box<dyn layer3to4::IPacket>) {
+            let buffer = data.bytes();
+            self.dev.write_all(&buffer[..]).unwrap();
         }
     }
 }
