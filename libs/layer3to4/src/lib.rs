@@ -118,6 +118,11 @@ pub mod tcp {
     }
 }
 
+pub trait IPacket {
+    fn bytes_mut(&mut self) -> &mut [u8];
+    fn bytes(&self) -> &[u8];
+}
+
 pub trait Layer3Device: Send + 'static {
     // 设备ip
     fn ip(&self) -> Ipv4Addr;
@@ -366,6 +371,10 @@ pub trait Layer3Device: Send + 'static {
         }
         false
     }
+    // 读数据包
+    fn read(&mut self) -> Box<dyn IPacket>;
+    // 写数据包
+    fn write(&mut self, data: Box<dyn IPacket>);
     // 从tun设备收发数据包
     fn server_forever(
         &mut self,
@@ -374,7 +383,25 @@ pub trait Layer3Device: Send + 'static {
         tcp_unreal_context: Arc<RwLock<UnrealContext>>,
         udp_kernel_src_port: u16,
         udp_unreal_context: Arc<RwLock<UnrealContext>>,
-    );
+    ) {
+        loop {
+            let mut pkg = self.read();
+            // 收到ip包数据
+            let buffer = pkg.bytes_mut();
+            // 处理ip数据
+            let success = self.handle_packet(
+                buffer,
+                unreal_kernel_dst,
+                tcp_kernel_src_port,
+                tcp_unreal_context.clone(),
+                udp_kernel_src_port,
+                udp_unreal_context.clone(),
+            );
+            if success {
+                self.write(pkg);
+            }
+        }
+    }
 }
 
 pub struct UnrealContext {

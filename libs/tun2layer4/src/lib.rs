@@ -61,6 +61,26 @@ pub mod os_tun {
     use layer3to4::{dev_run, Layer3Device, TcpWorker, UdpWorker};
     use std::{net::Ipv4Addr, sync::Arc};
 
+    struct TransPacket {
+        ipacket: wintun::Packet
+    }
+    impl TransPacket {
+        fn new(ipacket: wintun::Packet) -> Self {
+            TransPacket {
+                ipacket
+            }
+        }
+    }
+    impl layer3to4::IPacket for TransPacket {
+        fn bytes_mut(&mut self) -> &mut [u8] {
+            self.ipacket.bytes_mut()
+        }
+
+        fn bytes(&self) -> &[u8] {
+            self.ipacket.bytes()
+        }
+    }
+
     pub fn new(tun_name: String, opt: u8, ip: Ipv4Addr, mask: u8, routes: Option<Vec<String>>) -> (Option<TcpWorker>, Option<UdpWorker>) {
         let dev = TunDevice::new(tun_name, ip, mask, routes);
         dev_run(dev, opt)
@@ -131,44 +151,28 @@ pub mod os_tun {
         fn ip(&self) -> Ipv4Addr {
             self.ip.clone()
         }
-
-        fn server_forever(
-            &mut self,
-            unreal_kernel_dst: Ipv4Addr,
-            tcp_kernel_src_port: u16,
-            tcp_unreal_context: Arc<std::sync::RwLock<layer3to4::UnrealContext>>,
-            udp_kernel_src_port: u16,
-            udp_unreal_context: Arc<std::sync::RwLock<layer3to4::UnrealContext>>,
-        ) {
+        
+        fn read(&mut self) -> Box<dyn layer3to4::IPacket> {
             loop {
-                let mut pkt = match self.session.receive_blocking() {
+                let pkt = match self.session.receive_blocking() {
                     Ok(pkt) => pkt,
                     Err(_) => {
                         continue;
                     }
                 };
-                // 收到ip包数据
-                let buffer = pkt.bytes_mut();
-                // 处理ip数据
-                let success = self.handle_packet(
-                    buffer,
-                    unreal_kernel_dst,
-                    tcp_kernel_src_port,
-                    tcp_unreal_context.clone(),
-                    udp_kernel_src_port,
-                    udp_unreal_context.clone(),
-                );
-                // 发送处理后的数据
-                if success {
-                    let mut write_pack = self
-                        .session
-                        .allocate_send_packet(buffer.len() as u16)
-                        .unwrap();
-                    let resp_pack = write_pack.bytes_mut();
-                    resp_pack.copy_from_slice(buffer);
-                    self.session.send_packet(write_pack);
-                }
+                return Box::new(TransPacket::new(pkt));
             }
+        }
+        
+        fn write(&mut self, data: Box<dyn layer3to4::IPacket>) {
+            let buffer = data.bytes();
+            let mut write_pack = self
+                .session
+                .allocate_send_packet(buffer.len() as u16)
+                .unwrap();
+            let resp_pack = write_pack.bytes_mut();
+            resp_pack.copy_from_slice(buffer);
+            self.session.send_packet(write_pack);
         }
     }
 }
