@@ -15,15 +15,15 @@ panic = "abort"
 
 [dependencies]
 
-log = "0.4"
-simple_logger = "4.0.0"
-serde = { version = "1.0", features = ["derive"] }
-serde_yaml = "0.9"
+log = { workspace = true }
+simple_logger = { workspace = true }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
 
 
-tokio = { version = "1.25.0", features = ["full"] }
-tokio-rustls = { version = "0.23.4" }
-rustls-pemfile = "1.0.2"
+tokio = { workspace = true }
+tokio-rustls = { workspace = true }
+rustls-pemfile = { workspace = true }
 
 tun2layer4 = {path = "../libs/tun2layer4"}
 
